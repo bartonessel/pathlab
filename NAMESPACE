@@ -1,0 +1,6 @@
+export(run)
+export(stop_app)
+export(check_setup)
+export(install_extras)
+export(addin_start)
+export(addin_viewer)

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="PathLab SEM - browser-based PLS-SEM modelling powered by the SEMinR R package" />
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <title>PathLab SEM</title>
+    <script type="module" crossorigin src="./assets/index-K9rZg0SY.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/rolldown-runtime-CbXtAM7H.js">
+    <link rel="stylesheet" crossorigin href="./assets/index-CxDTQ_dP.css">
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      // Before the app mounts nothing is on screen, so a failed script load or an unsupported browser would leave a
+      // blank page. Show the error (and how to recover) instead. Once the app has started, its own handling takes over.
+      (function () {
+        var shown = false;
+        function show(msg) {
+          if (shown || window.__pathlabStarted) return;
+          shown = true;
+          var el = document.getElementById('root');
+          el.innerHTML = '<div style="font:14px/1.5 system-ui,sans-serif;max-width:640px;margin:48px auto;padding:0 16px;color:#14202e">' +
+            '<h1 style="font-size:20px">PathLab SEM could not start</h1>' +
+            '<p>The page loaded but the app did not. Try a hard reload (Ctrl+F5). If that does not help, use an up-to-date Chrome, Edge or Firefox, ' +
+            'check that the development server is still running (npm --prefix frontend run dev), and send this message to the developer:</p>' +
+            '<pre style="white-space:pre-wrap;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;padding:10px"></pre>' +
+            '<button id="pl-reset" style="padding:6px 12px">Reset saved data &amp; reload</button></div>';
+          el.querySelector('pre').textContent = msg;
+          document.getElementById('pl-reset').onclick = function () {
+            [localStorage, sessionStorage].forEach(function (s) {
+              try { Object.keys(s).forEach(function (k) { if (k.indexOf('pathlab.') === 0) s.removeItem(k); }); } catch (e) {}
+            });
+            location.reload();
+          };
+        }
+        window.addEventListener('error', function (e) {
+          var t = e.target;
+          if (t && t !== window && (t.src || t.href)) show('Could not load ' + (t.src || t.href));
+          else show(e.message + (e.error && e.error.stack ? '\n\n' + e.error.stack : ''));
+        }, true);
+        window.addEventListener('unhandledrejection', function (e) { show(String(e.reason && (e.reason.stack || e.reason.message) || e.reason)); });
+        setTimeout(function () { if (!window.__pathlabStarted) show('The app did not start within 20 seconds.'); }, 20000);
+      })();
+    </script>
+  </body>
+</html>

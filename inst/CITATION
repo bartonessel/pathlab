@@ -1,0 +1,8 @@
+bibentry(
+  bibtype = "Manual",
+  title = "PathLab SEM",
+  author = person("Harry Barton", "Essel"),
+  year = "2026",
+  note = "Version 0.17.16 [Computer software]",
+  textVersion = "Essel, H. B. (2026). PathLab SEM (Version 0.17.16) [Computer software]."
+)

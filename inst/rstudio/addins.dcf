@@ -1,0 +1,14 @@
+Name: Start PathLab SEM
+Description: Opens PathLab SEM in your web browser. R stays free while it runs.
+Binding: addin_start
+Interactive: false
+
+Name: Start PathLab SEM in the Viewer
+Description: Opens PathLab SEM in the Viewer pane. R stays free while it runs.
+Binding: addin_viewer
+Interactive: false
+
+Name: Stop PathLab SEM
+Description: Stops PathLab SEM. Save your project in the app first.
+Binding: stop_app
+Interactive: false

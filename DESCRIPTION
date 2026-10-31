@@ -1,0 +1,34 @@
+Package: pathlab
+Type: Package
+Title: Point-and-Click PLS-SEM, CB-SEM, Statistics and More in the Browser
+Version: 0.17.16
+Authors@R: person("Harry Barton", "Essel", email = "bartoness.knust.fes.eist@gmail.com", role = c("aut", "cre", "cph"))
+Description: PathLab SEM runs on your own computer and opens in your web browser, in the way
+    'bibliometrix::biblioshiny()' does. You draw a path model on a canvas and estimate it with
+    'seminr' (PLS-SEM), 'lavaan' (CB-SEM) or 'cSEM' (GSCA). The app also offers statistics with the
+    'jmv' engine, qualitative comparative analysis, latent profile and class analysis, machine
+    learning, bibliometrics, and text and qualitative data analysis. Your data never leave your
+    computer: start the app with run().
+License: GPL-3
+Encoding: UTF-8
+Depends: R (>= 4.2)
+SystemRequirements: A web browser. Optional: Quarto (Word reports), a 64-bit Java (WEKA learners).
+Imports:
+    plumber, seminr, jsonlite, callr, processx, httpuv, later, digest, curl, zip,
+    readxl, readODS, haven, jmvReadWrite, writexl, openxlsx, foreign,
+    flextable, officer, knitr, rmarkdown, ggplot2, ragg, scales, plotly, xml2, httr2,
+    NCA, flexmix, lavaan, semTools, cSEM, psych, GPArotation,
+    tidyLPA, mclust, poLCA, depmixS4, lcmm, QCA, VGAM,
+    jmv, nortest, BayesFactor, emmeans, car, lmtest, sandwich, lme4, lmerTest, ivreg, plm,
+    forecast, mice, pwr, metafor, ca, exact2x2, irr, qcc,
+    survival, cluster, MASS, nnet, mgcv, Matrix, rpart,
+    caret, ranger, glmnet, gbm, NeuralNetTools, pROC, yardstick, kernlab, xgboost, naivebayes,
+    bibliometrix, bibliometrixData, openalexR, pubmedR, maps, igraph,
+    quanteda, quanteda.textstats, quanteda.textplots, stm, topicmodels, seededlda, udpipe,
+    sentimentr, lexicon, textrank, stopwords,
+    stats, utils, graphics, grDevices, tools, methods, parallel
+Suggests:
+    RWeka, rJava, av, pdftools, rstudioapi, testthat, httr
+NeedsCompilation: no
+URL: https://github.com/bartonessel/pathlab, https://bartonessel.r-universe.dev/pathlab
+BugReports: https://github.com/bartonessel/pathlab/issues

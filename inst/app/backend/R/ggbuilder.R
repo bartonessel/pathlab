@@ -1,0 +1,203 @@
+# ggplot2 builder: a visual editor for the grammar of graphics. The specification (layers of geoms with their
+# aesthetic mappings and parameters, facets, labels, theme, coordinates) is checked against a whitelist, turned into
+# ggplot2 R code (values inserted with deparse(), variable names in backticks) and that exact code is evaluated, so
+# the plot and the code shown to the user are the same. Nothing typed by the user is ever run as code.
+
+# Parameter types: "num:min:max", "int:min:max", "colour", "bool", "enum:a,b,c", "linetype", "shape".
+GG_COMMON_COL <- list(colour = "colour", alpha = "num:0:1")
+GG_GEOMS <- list(
+  point = list(label = "Points", group = "Basic", fn = "geom_point", aes = c("x", "y", "colour", "fill", "shape", "size", "alpha", "group"), req = c("x", "y"),
+               params = c(list(size = "num:0.1:20", shape = "shape", fill = "colour", stroke = "num:0:5"), GG_COMMON_COL), positions = c("identity", "jitter")),
+  jitter = list(label = "Jittered points", group = "Basic", fn = "geom_jitter", aes = c("x", "y", "colour", "fill", "shape", "size", "alpha", "group"), req = c("x", "y"),
+                params = c(list(width = "num:0:10", height = "num:0:10", size = "num:0.1:20", shape = "shape"), GG_COMMON_COL)),
+  line = list(label = "Line", group = "Basic", fn = "geom_line", aes = c("x", "y", "colour", "linetype", "alpha", "group"), req = c("x", "y"),
+              params = c(list(linewidth = "num:0.1:10", linetype = "linetype"), GG_COMMON_COL)),
+  area = list(label = "Area", group = "Basic", fn = "geom_area", aes = c("x", "y", "fill", "colour", "alpha", "group"), req = c("x", "y"),
+              params = c(list(fill = "colour", linewidth = "num:0:10"), GG_COMMON_COL), positions = c("stack", "identity", "fill")),
+  bar = list(label = "Bar (counts)", group = "Distribution", fn = "geom_bar", aes = c("x", "fill", "colour", "alpha", "group"), req = "x",
+             params = c(list(fill = "colour", width = "num:0.05:1"), GG_COMMON_COL), positions = c("stack", "dodge", "fill")),
+  col = list(label = "Bar (values)", group = "Basic", fn = "geom_col", aes = c("x", "y", "fill", "colour", "alpha", "group"), req = c("x", "y"),
+             params = c(list(fill = "colour", width = "num:0.05:1"), GG_COMMON_COL), positions = c("stack", "dodge", "fill")),
+  histogram = list(label = "Histogram", group = "Distribution", fn = "geom_histogram", aes = c("x", "fill", "colour", "alpha", "group"), req = "x",
+                   params = c(list(bins = "int:2:200", binwidth = "num:0:1e9", fill = "colour"), GG_COMMON_COL), positions = c("stack", "identity", "dodge")),
+  density = list(label = "Density", group = "Distribution", fn = "geom_density", aes = c("x", "fill", "colour", "linetype", "alpha", "group"), req = "x",
+                 params = c(list(adjust = "num:0.1:10", fill = "colour", linewidth = "num:0.1:10"), GG_COMMON_COL), positions = c("identity", "stack")),
+  density2d = list(label = "2D density (contours)", group = "Distribution", fn = "geom_density_2d", aes = c("x", "y", "colour", "alpha", "group"), req = c("x", "y"),
+                   params = c(list(bins = "int:2:50", linewidth = "num:0.1:5", adjust = "num:0.1:10"), GG_COMMON_COL)),
+  boxplot = list(label = "Box plot", group = "Distribution", fn = "geom_boxplot", aes = c("x", "y", "fill", "colour", "alpha", "group"), req = "y",
+                 params = c(list(fill = "colour", width = "num:0.05:1", notch = "bool", varwidth = "bool", outlier.shape = "shape"), GG_COMMON_COL), positions = c("dodge2")),
+  violin = list(label = "Violin", group = "Distribution", fn = "geom_violin", aes = c("x", "y", "fill", "colour", "alpha", "group"), req = "y",
+                params = c(list(fill = "colour", trim = "bool", scale = "enum:area,count,width", width = "num:0.05:1.5"), GG_COMMON_COL), positions = c("dodge")),
+  summary = list(label = "Mean with error bars", group = "Statistics", fn = "stat_summary", aes = c("x", "y", "colour", "group"), req = c("x", "y"),
+                 params = c(list(fun.data = "enum:mean_se,mean_cl_normal,mean_cl_boot,mean_sdl,median_hilow", geom = "enum:pointrange,errorbar,crossbar,linerange,point,line,col,bar", size = "num:0:5", linewidth = "num:0.1:5", width = "num:0:1"), GG_COMMON_COL),
+                 positions = c("identity", "dodge")),
+  smooth = list(label = "Smoothed line (lm / loess)", group = "Statistics", fn = "geom_smooth", aes = c("x", "y", "colour", "fill", "linetype", "group"), req = c("x", "y"),
+                params = c(list(method = "enum:lm,loess,glm,gam", se = "bool", level = "num:0.5:0.999", linewidth = "num:0.1:10", linetype = "linetype", fill = "colour"), GG_COMMON_COL)),
+  errorbar = list(label = "Error bars (from variables)", group = "Statistics", fn = "geom_errorbar", aes = c("x", "ymin", "ymax", "colour", "group"), req = c("x", "ymin", "ymax"),
+                  params = c(list(width = "num:0:2", linewidth = "num:0.1:5"), GG_COMMON_COL), positions = c("identity", "dodge")),
+  tile = list(label = "Tiles (heat map)", group = "Basic", fn = "geom_tile", aes = c("x", "y", "fill", "alpha"), req = c("x", "y"), params = c(list(colour = "colour", linewidth = "num:0:5"), list(alpha = "num:0:1"))),
+  text = list(label = "Text labels", group = "Annotation", fn = "geom_text", aes = c("x", "y", "label", "colour", "size", "alpha"), req = c("x", "y", "label"),
+              params = c(list(size = "num:1:20", vjust = "num:-2:3", hjust = "num:-2:3", check_overlap = "bool"), GG_COMMON_COL), positions = c("identity", "jitter")),
+  rug = list(label = "Rug", group = "Distribution", fn = "geom_rug", aes = c("x", "y", "colour", "alpha"), req = character(0), params = c(list(sides = "enum:bl,b,l,tr,trbl", length = "num:0.005:0.2"), GG_COMMON_COL)),
+  qq = list(label = "Normal Q-Q points", group = "Statistics", fn = "geom_qq", aes = c("sample", "colour", "group"), req = "sample", params = c(list(size = "num:0.1:10"), GG_COMMON_COL)),
+  qqline = list(label = "Normal Q-Q line", group = "Statistics", fn = "geom_qq_line", aes = c("sample", "colour", "group"), req = "sample", params = c(list(linewidth = "num:0.1:5", linetype = "linetype"), GG_COMMON_COL)),
+  hline = list(label = "Horizontal reference line", group = "Annotation", fn = "geom_hline", aes = character(0), req = character(0), params = c(list(yintercept = "num:-1e12:1e12", linetype = "linetype", linewidth = "num:0.1:10"), GG_COMMON_COL)),
+  vline = list(label = "Vertical reference line", group = "Annotation", fn = "geom_vline", aes = character(0), req = character(0), params = c(list(xintercept = "num:-1e12:1e12", linetype = "linetype", linewidth = "num:0.1:10"), GG_COMMON_COL))
+)
+GG_AES <- c("x", "y", "colour", "fill", "shape", "size", "alpha", "linetype", "group", "label", "ymin", "ymax", "sample")
+GG_DISCRETE_AES <- c("shape", "linetype", "group")
+GG_THEMES <- c(grey = "theme_grey", bw = "theme_bw", minimal = "theme_minimal", classic = "theme_classic", light = "theme_light", dark = "theme_dark", linedraw = "theme_linedraw", void = "theme_void", apa = "theme_classic")
+GG_LINETYPES <- c("solid", "dashed", "dotted", "dotdash", "longdash", "twodash")
+
+gg_registry <- function() list(
+  geoms = lapply(names(GG_GEOMS), function(g) { d <- GG_GEOMS[[g]]; list(id = g, label = d$label, group = d$group, fn = d$fn, aes = as.list(d$aes), req = as.list(d$req),
+                                                                   params = lapply(names(d$params), function(p) list(name = p, type = d$params[[p]])), positions = as.list(d$positions %||% character(0))) }),
+  aes = as.list(GG_AES), themes = as.list(names(GG_THEMES)), linetypes = as.list(GG_LINETYPES))
+
+gg_colour_ok <- function(x) is.character(x) && length(x) == 1 && (grepl("^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$", x) || x %in% grDevices::colors())
+
+#' Check one parameter value against its type; returns the cleaned value or NULL (dropped) / error.
+gg_param <- function(type, v, what) {
+  if (is.null(v) || (is.character(v) && !nzchar(v))) return(NULL)
+  kind <- sub(":.*$", "", type)
+  bad <- function() api_error(400, "gg_param", sprintf("'%s' has an invalid value.", what))
+  switch(kind,
+    num = , int = { x <- suppressWarnings(as.numeric(v))[1]; if (is.na(x)) bad(); r <- as.numeric(strsplit(type, ":")[[1]][2:3]); x <- min(max(x, r[1]), r[2]); if (kind == "int") as.integer(round(x)) else x },
+    colour = { x <- as.character(v)[1]; if (!gg_colour_ok(x)) bad(); x },
+    bool = isTRUE(v),
+    enum = { x <- as.character(v)[1]; if (!x %in% strsplit(sub("^enum:", "", type), ",")[[1]]) bad(); x },
+    linetype = { x <- as.character(v)[1]; if (!x %in% GG_LINETYPES) bad(); x },
+    shape = { x <- suppressWarnings(as.integer(v))[1]; if (is.na(x) || x < 0 || x > 25) bad(); x },
+    bad())
+}
+
+#' Validate a builder specification (unknown fields are dropped; invalid values are refused).
+normalize_gg <- function(raw) {
+  raw <- raw %||% list()
+  aes_of <- function(a) { a <- a %||% list(); out <- list(); for (k in intersect(names(a), GG_AES)) { v <- as.character(a[[k]] %||% "")[1]; if (nzchar(v)) out[[k]] <- v }; out }
+  layers <- lapply(raw$layers %||% list(), function(l) {
+    g <- as.character(l$geom %||% "")[1]; def <- GG_GEOMS[[g]]
+    if (is.null(def)) api_error(400, "gg_geom", sprintf("Unknown layer type '%s'.", g))
+    a <- aes_of(l$aes); a <- a[intersect(names(a), def$aes)]
+    p <- list(); for (k in intersect(names(l$params %||% list()), names(def$params))) { v <- gg_param(def$params[[k]], l$params[[k]], k); if (!is.null(v)) p[[k]] <- v }
+    pos <- as.character(l$position %||% "")[1]; if (!nzchar(pos) || !pos %in% (def$positions %||% character(0))) pos <- ""
+    list(geom = g, aes = a, params = p, position = pos, inherit = !isFALSE(l$inherit))
+  })
+  if (length(layers) > 12) api_error(400, "gg_layers", "A plot can have at most 12 layers.")
+  f <- raw$facet %||% list()
+  ftype <- as.character(f$type %||% "none")[1]; if (!ftype %in% c("none", "wrap", "grid")) ftype <- "none"
+  facet <- list(type = ftype, wrap = head(as.character(unlist(f$wrap %||% list())), 2), rows = as.character(f$rows %||% "")[1], cols = as.character(f$cols %||% "")[1],
+                scales = if ((f$scales %||% "fixed") %in% c("fixed", "free", "free_x", "free_y")) f$scales %||% "fixed" else "fixed",
+                ncol = { n <- suppressWarnings(as.integer(f$ncol %||% NA)); if (is.na(n) || n < 1) NA_integer_ else min(n, 10L) })
+  lab_keys <- c("title", "subtitle", "caption", "x", "y", "colour", "fill", "shape", "size", "linetype", "alpha")
+  labs <- list(); for (k in intersect(names(raw$labels %||% list()), lab_keys)) { v <- as.character(raw$labels[[k]] %||% "")[1]; if (nzchar(v)) labs[[k]] <- substr(v, 1, 300) }
+  th <- raw$theme %||% list()
+  theme <- list(base = if ((th$base %||% "bw") %in% names(GG_THEMES)) th$base %||% "bw" else "bw",
+                size = min(max(suppressWarnings(as.numeric(th$size %||% 12)), 6, na.rm = TRUE), 30),
+                family = if ((th$family %||% "sans") %in% c("sans", "serif", "mono")) th$family %||% "sans" else "sans",
+                legend = if ((th$legend %||% "right") %in% c("right", "bottom", "top", "left", "none")) th$legend %||% "right" else "right",
+                centreTitle = isTRUE(th$centreTitle), noGrid = isTRUE(th$noGrid))
+  sz <- raw$size %||% list()
+  size <- list(width = min(max(suppressWarnings(as.numeric(sz$width %||% 7)), 2, na.rm = TRUE), 20), height = min(max(suppressWarnings(as.numeric(sz$height %||% 5)), 2, na.rm = TRUE), 20))
+  t3 <- raw$three %||% list()
+  three <- list(enabled = isTRUE(t3$enabled), z = { z <- as.character(t3$z %||% "")[1]; if (nzchar(z)) z else NULL },
+                zLabel = { zl <- as.character(t3$zLabel %||% "")[1]; if (nzchar(zl)) substr(zl, 1, 200) else NULL },
+                opacity = min(max(suppressWarnings(as.numeric(t3$opacity %||% 0.75)), 0.1, na.rm = TRUE), 1),
+                aspect = if ((t3$aspect %||% "cube") %in% c("cube", "data", "auto")) t3$aspect %||% "cube" else "cube")
+  list(aes = aes_of(raw$aes), layers = layers, facet = facet, labels = labs, theme = theme, coord = list(flip = isTRUE(raw$coord$flip)), size = size, three = three)
+}
+
+gg_vars <- function(sp) unique(c(if (isTRUE(sp$three$enabled)) sp$three$z, unlist(sp$aes), unlist(lapply(sp$layers, function(l) unlist(l$aes))), sp$facet$wrap, Filter(nzchar, c(sp$facet$rows, sp$facet$cols))))
+
+gg_name <- function(v) { if (grepl("`", v, fixed = TRUE)) api_error(400, "gg_name", "Variable names with backticks cannot be plotted."); if (make.names(v) == v) v else paste0("`", v, "`") }
+
+#' ggplot2 code of a specification. `discrete`: variables to turn into factors (nominal / ordinal measures).
+gg_code <- function(sp, discrete = character(0), ordered = character(0), missing_code = NULL, data_line = TRUE) {
+  dq <- function(x) if (is.integer(x)) as.character(x) else paste(deparse(x, width.cutoff = 500L), collapse = "")
+  aes_txt <- function(a) if (length(a)) paste0("aes(", paste(sprintf("%s = %s", names(a), vapply(unlist(a), gg_name, "")), collapse = ", "), ")") else ""
+  L <- c("library(ggplot2)")
+  if (data_line) L <- c(L, "# data <- read.csv(\"your_data.csv\")   # the same dataset as in the app")
+  if (!is.null(missing_code)) L <- c(L, sprintf("data[data == %s] <- NA   # project missing-value code", dq(missing_code)))
+  for (v in discrete) L <- c(L, sprintf("data[[%s]] <- factor(data[[%s]]%s)", dq(v), dq(v), if (v %in% ordered) ", ordered = TRUE" else ""))
+  parts <- sprintf("ggplot(data%s)", if (length(sp$aes)) paste0(", ", aes_txt(sp$aes)) else "")
+  for (l in sp$layers) {
+    def <- GG_GEOMS[[l$geom]]
+    args <- c(if (length(l$aes)) aes_txt(l$aes),
+              vapply(names(l$params), function(k) sprintf("%s = %s", if (make.names(k) == k) k else paste0("`", k, "`"), dq(l$params[[k]])), ""),
+              if (nzchar(l$position)) sprintf("position = %s", dq(l$position)),
+              if (!isTRUE(l$inherit)) "inherit.aes = FALSE",
+              if (l$geom == "smooth" && is.null(l$params$method)) "method = \"lm\"",
+              if (l$geom == "smooth") if (identical(l$params$method, "gam")) "formula = y ~ s(x, bs = \"cs\")" else "formula = y ~ x",
+              if (l$geom == "summary" && is.null(l$params$fun.data)) "fun.data = \"mean_se\"")
+    if (l$geom == "smooth" && identical(l$params$method, "glm")) args <- c(args, "method.args = list(family = \"binomial\")")
+    parts <- c(parts, sprintf("%s(%s)", def$fn, paste(args, collapse = ", ")))
+  }
+  f <- sp$facet
+  if (f$type == "wrap" && length(f$wrap)) parts <- c(parts, sprintf("facet_wrap(vars(%s)%s%s)", paste(vapply(f$wrap, gg_name, ""), collapse = ", "), if (f$scales != "fixed") sprintf(", scales = %s", dq(f$scales)) else "", if (!is.na(f$ncol)) sprintf(", ncol = %d", f$ncol) else ""))
+  if (f$type == "grid" && (nzchar(f$rows) || nzchar(f$cols))) parts <- c(parts, sprintf("facet_grid(%s%s%s)", if (nzchar(f$rows)) sprintf("rows = vars(%s)", gg_name(f$rows)) else "", if (nzchar(f$rows) && nzchar(f$cols)) ", " else "", paste0(if (nzchar(f$cols)) sprintf("cols = vars(%s)", gg_name(f$cols)) else "", if (f$scales != "fixed") sprintf(", scales = %s", dq(f$scales)) else "")))
+  if (isTRUE(sp$coord$flip)) parts <- c(parts, "coord_flip()")
+  if (length(sp$labels)) parts <- c(parts, sprintf("labs(%s)", paste(sprintf("%s = %s", names(sp$labels), vapply(sp$labels, dq, "")), collapse = ", ")))
+  t <- sp$theme
+  parts <- c(parts, sprintf("%s(base_size = %s, base_family = %s)", GG_THEMES[[t$base]], dq(t$size), dq(t$family)))
+  th <- c(if (t$legend != "right") sprintf("legend.position = %s", dq(t$legend)), if (isTRUE(t$centreTitle)) "plot.title = element_text(hjust = 0.5)",
+          if (isTRUE(t$noGrid) || t$base == "apa") "panel.grid = element_blank()",
+          if (t$base == "apa") c("axis.line = element_line(colour = \"black\")", "legend.key = element_blank()", "strip.background = element_blank()"))
+  if (length(th)) parts <- c(parts, sprintf("theme(%s)", paste(th, collapse = ", ")))
+  c(L, "", paste0("p <- ", paste(parts, collapse = " +\n  ")), "p")
+}
+
+#' Prepare the data (missing code, factors for discrete mappings) and evaluate the generated code.
+run_ggplot <- function(df, sp, measures, missing_code = NULL, dpi = 110, format = "png", levels = list()) {
+  if (!requireNamespace("ggplot2", quietly = TRUE)) api_error(501, "gg_unavailable", "The ggplot2 R package is not installed on the analysis server.")
+  if (!length(sp$layers)) api_error(422, "gg_layers", "Add at least one layer.")
+  vars <- gg_vars(sp)
+  miss <- setdiff(vars, names(df)); if (length(miss)) api_error(422, "gg_missing", sprintf("Not in the dataset: %s.", paste(miss, collapse = ", ")))
+  for (l in sp$layers) { have <- c(names(l$aes), if (isTRUE(l$inherit)) names(sp$aes)); need <- setdiff(GG_GEOMS[[l$geom]]$req, have)
+    if (length(need)) api_error(422, "gg_aes", sprintf("The %s layer needs %s.", tolower(GG_GEOMS[[l$geom]]$label), paste(need, collapse = " and "))) }
+  d <- df[, vars, drop = FALSE]
+  if (!is.null(missing_code)) for (cn in names(d)) if (is.numeric(d[[cn]])) d[[cn]][!is.na(d[[cn]]) & d[[cn]] == missing_code] <- NA
+  disc_aes <- unique(c(unlist(lapply(c(list(sp$aes), lapply(sp$layers, `[[`, "aes")), function(a) unlist(a[intersect(names(a), GG_DISCRETE_AES)]))), sp$facet$wrap, Filter(nzchar, c(sp$facet$rows, sp$facet$cols))))
+  nominal <- names(Filter(function(m) m %in% c("nominal", "ordinal"), measures))
+  discrete <- intersect(vars, unique(c(disc_aes, nominal, names(d)[vapply(d, function(x) is.character(x) || is.logical(x), TRUE)])))
+  ordered <- intersect(discrete, names(Filter(function(m) identical(m, "ordinal"), measures)))
+  code <- gg_code(sp, discrete, ordered, missing_code)
+  data <- d
+  for (v in discrete) data[[v]] <- if (!is.null(levels[[v]])) labelled_factor(data[[v]], levels[[v]], ordered = v %in% ordered) else factor(data[[v]], ordered = v %in% ordered)
+  env <- new.env(parent = asNamespace("ggplot2")); env$data <- data
+  warns <- character(0)
+  p <- withCallingHandlers(tryCatch(eval(parse(text = paste(code[-(1:which(code == "")[1])], collapse = "\n")), envir = env),
+                                    error = function(e) api_error(422, "gg_failed", paste("The plot could not be built:", sanitize_message(conditionMessage(e))))),
+                           warning = function(w) { warns <<- c(warns, sanitize_message(conditionMessage(w))); invokeRestart("muffleWarning") },
+                           message = function(m) invokeRestart("muffleMessage"))
+  path <- gg_render(p, sp$size$width, sp$size$height, dpi, format, function(w) warns <<- c(warns, w))
+  fig3d <- if (isTRUE(sp$three$enabled)) gg3d_figure(data, sp, function(w) warns <<- c(warns, w)) else NULL
+  if (!is.null(fig3d)) code <- c(code, gg3d_code(sp))
+  list(path = path, code = paste(code, collapse = "\n"), warnings = unique(warns), discrete = discrete, fig3d = fig3d)
+}
+
+gg_render <- function(p, width, height, dpi, format, warn) {
+  path <- tempfile(fileext = paste0(".", format))
+  dev <- switch(format, png = if (requireNamespace("ragg", quietly = TRUE)) ragg::agg_png else "png", pdf = grDevices::cairo_pdf, svg = grDevices::svg, tiff = if (requireNamespace("ragg", quietly = TRUE)) ragg::agg_tiff else "tiff",
+                api_error(400, "gg_format", "Choose png, pdf, svg or tiff."))
+  withCallingHandlers(tryCatch(ggplot2::ggsave(path, p, device = dev, width = width, height = height, units = "in", dpi = dpi, bg = "white"),
+                               error = function(e) api_error(422, "gg_failed", paste("The plot could not be drawn:", sanitize_message(conditionMessage(e))))),
+                      warning = function(w) { warn(sanitize_message(conditionMessage(w))); invokeRestart("muffleWarning") },
+                      message = function(m) invokeRestart("muffleMessage"))
+  path
+}
+
+#' The builder as a Statistics procedure: the rendered PNG is the plot; the code is the R syntax.
+run_stats_ggplot <- function(df, s, missing_code) {
+  t0 <- Sys.time()
+  sp <- s$options$spec
+  out <- run_ggplot(df, sp, s$measures, missing_code, dpi = 110, format = "png", levels = s$levels)
+  png <- jsonlite::base64_enc(readBin(out$path, "raw", file.info(out$path)$size))
+  list(kind = "stats", proc = "ggplot", label = "ggplot2 Builder", group = "Plots", options = s$options, measures = s$measures,
+       n = list(input = nrow(df), complete = nrow(df), cellsRecoded = 0L), tables = list(),
+       plots = Filter(Negate(is.null), list(
+         list(type = "image", png = png, width = sp$size$width, height = sp$size$height, title = sp$labels$title %||% "",
+              alt = paste0("ggplot2 plot", if (length(sp$labels$title)) paste0(": ", sp$labels$title) else "")),
+         if (!is.null(out$fig3d)) list(type = "plotly3d", figure = out$fig3d, title = sp$labels$title %||% "", width = sp$size$width, height = sp$size$height))),
+       warnings = as.list(out$warnings), rCode = out$code, packages = list(ggplot2 = as.character(utils::packageVersion("ggplot2"))),
+       durationSeconds = as.numeric(difftime(Sys.time(), t0, units = "secs")))
+}

@@ -1,0 +1,49 @@
+{
+  "format": "pathlab-sem-project",
+  "version": 1,
+  "name": "Technology adoption (sample)",
+  "description": "Synthetic survey data (n = 320) with an extended UTAUT-style model. Facilitating Conditions is specified as a Mode B (formative) composite; the other constructs are Mode A composites. The data contain 8 missing values, so you will be asked to choose a missing-data treatment before running.",
+  "savedAt": "2026-10-13T00:00:00Z",
+  "dataset": {
+    "filename": "pathlab_sample_technology_adoption.csv",
+    "checksum": null
+  },
+  "roles": {},
+  "model": {
+    "constructs": [
+      { "id": "c_ee", "name": "Effort Expectancy", "mode": "composite_a", "indicators": ["EE1", "EE2", "EE3"], "x": 240, "y": 320, "indicatorSide": "left" },
+      { "id": "c_pe", "name": "Performance Expectancy", "mode": "composite_a", "indicators": ["PE1", "PE2", "PE3", "PE4"], "x": 560, "y": 150, "indicatorSide": "top" },
+      { "id": "c_si", "name": "Social Influence", "mode": "composite_a", "indicators": ["SI1", "SI2", "SI3"], "x": 240, "y": 580, "indicatorSide": "left" },
+      { "id": "c_bi", "name": "Behavioural Intention", "mode": "composite_a", "indicators": ["BI1", "BI2", "BI3"], "x": 640, "y": 450, "indicatorSide": "bottom" },
+      { "id": "c_fc", "name": "Facilitating Conditions", "mode": "composite_b", "indicators": ["FC1", "FC2", "FC3"], "x": 1000, "y": 720, "indicatorSide": "bottom" },
+      { "id": "c_ub", "name": "Use Behaviour", "mode": "composite_a", "indicators": ["UB1", "UB2", "UB3"], "x": 1000, "y": 450, "indicatorSide": "right" }
+    ],
+    "paths": [
+      { "id": "p1", "from": "c_ee", "to": "c_pe" },
+      { "id": "p2", "from": "c_pe", "to": "c_bi" },
+      { "id": "p3", "from": "c_ee", "to": "c_bi" },
+      { "id": "p4", "from": "c_si", "to": "c_bi" },
+      { "id": "p5", "from": "c_bi", "to": "c_ub" },
+      { "id": "p6", "from": "c_fc", "to": "c_ub" }
+    ]
+  },
+  "settings": {
+    "innerWeights": "path_weighting",
+    "maxIt": 300,
+    "stopCriterion": 7,
+    "missing": { "treatment": "none", "code": null },
+    "bootstrap": { "enabled": true, "nboot": 1000, "seed": 2026, "cores": 1, "confidenceLevel": 0.95, "specificIndirect": true },
+    "predict": { "enabled": false, "technique": "predict_DA", "noFolds": 10, "reps": 1, "seed": 2026 }
+  },
+  "report": {
+    "decisionRule": { "enabled": false, "alpha": 0.05, "criterion": "both" },
+    "hypotheses": [
+      { "pathId": "p1", "label": "H1", "expected": "positive" },
+      { "pathId": "p2", "label": "H2", "expected": "positive" },
+      { "pathId": "p3", "label": "H3", "expected": "positive" },
+      { "pathId": "p4", "label": "H4", "expected": "positive" },
+      { "pathId": "p5", "label": "H5", "expected": "positive" },
+      { "pathId": "p6", "label": "H6", "expected": "positive" }
+    ]
+  }
+}
