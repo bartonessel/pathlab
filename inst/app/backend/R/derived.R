@@ -321,6 +321,7 @@ stats_prefilter <- function(df, filters = NULL, weights = NULL) {
     attr(out, "pl-weights") <- df[[w]][keep]; attr(out, "pl-weights-name") <- w
   }
   attr(out, "pl-filtered") <- sum(!keep)
+  attr(out, "pl-rows") <- which(keep); attr(out, "pl-n") <- nrow(df)   # dataset rows of the analysed rows (saved variables)
   out
 }
 

@@ -11,10 +11,30 @@ GG3D_DENS <- c("density2d", "density", "violin", "boxplot", "rug")
 GG3D_BARS <- c("bar", "col", "histogram", "tile", "area", "summary", "errorbar")
 
 g3_num <- function(v) if (is.factor(v)) as.numeric(v) else suppressWarnings(as.numeric(v))
-g3_axis <- function(v, title) {
-  ax <- list(title = list(text = title), backgroundcolor = "#ffffff", gridcolor = "#d9dde3", zerolinecolor = "#aab2bd", showbackground = TRUE)
+#' A long axis title on two or more lines (3D axis titles lie along the axis and are cut at the edge of the view).
+g3_wrap <- function(title, width = 18) {
+  title <- as.character(title %||% "")[1]
+  if (nchar(title) <= width) return(title)
+  paste(strwrap(title, width = width), collapse = "<br>")
+}
+g3_axis <- function(v, title, angle = 0L) {
+  ax <- list(title = list(text = g3_wrap(title)), tickangle = -as.numeric(angle %||% 0), backgroundcolor = "#ffffff", gridcolor = "#d9dde3", zerolinecolor = "#aab2bd", showbackground = TRUE)
   if (is.factor(v)) { lv <- levels(droplevels(v)); ax$tickvals <- as.list(seq_along(levels(v))[levels(v) %in% lv]); ax$ticktext <- as.list(levels(v)[levels(v) %in% lv]) }
   ax
+}
+#' Colour bar of a continuous colour: compact (about half the plot's height, thin, no outline), centred beside the
+#' plot, with its title above it and three soft ticks (low, middle, high).
+g3_colorbar <- function(title, lo = NA, hi = NA) {
+  cb <- list(title = list(text = title, side = "top", font = list(size = 12, color = "#334155")),
+             len = 0.55, lenmode = "fraction", thickness = 10, thicknessmode = "pixels", y = 0.5, yanchor = "middle",
+             x = 1.0, xanchor = "left", xpad = 6, ypad = 0, outlinewidth = 0, borderwidth = 0,
+             ticks = "outside", ticklen = 3, tickwidth = 1, tickcolor = "#94A3B8",
+             tickfont = list(size = 11, color = "#64748B"), nticks = 3)
+  if (is.finite(lo) && is.finite(hi) && hi > lo) {
+    v <- c(lo, (lo + hi) / 2, hi)
+    cb$tickvals <- as.list(v); cb$ticktext <- as.list(format(signif(v, 3), trim = TRUE, drop0trailing = TRUE)); cb$tickmode <- "array"
+  }
+  cb
 }
 g3_cuboid <- function(x0, x1, y0, y1, z0, z1, k) {
   # Vertex order of plotly's cube example, so its 12 triangles close the box.
@@ -31,6 +51,8 @@ g3_groups <- function(d, cvar) {
 }
 
 gg3d_figure <- function(d, sp, warn) {
+  # Notes are held back until the end: when nothing can be drawn in 3D, one hint replaces them (the 2D plot is still drawn).
+  notes <- character(0); warn_out <- warn; warn <- function(w) notes <<- c(notes, w)
   th <- sp$three
   aes_of <- function(l) if (isTRUE(l$inherit)) utils::modifyList(sp$aes, l$aes) else l$aes
   xv <- sp$aes$x; yv <- sp$aes$y; zv <- th$z
@@ -43,14 +65,15 @@ gg3d_figure <- function(d, sp, warn) {
     cont_col <- !is.null(cvar) && !is.factor(d[[cvar]])
     const_col <- p$colour %||% p$fill
     if (g %in% c(GG3D_POINTS, GG3D_LINES)) {
-      if (!nzchar(zv %||% "")) { warn(sprintf("%s: choose a Z variable to draw it in 3D.", GG_GEOMS[[g]]$label)); next }
+      if (!nzchar(zv %||% "")) { warn(sprintf("3D view \u00b7 %s: choose a Z variable to draw this layer in 3D.", GG_GEOMS[[g]]$label)); next }
       any_z <- TRUE
       for (gr in g3_groups(d, if (cont_col) NULL else cvar)) {
         r <- gr$rows; r <- r[stats::complete.cases(d[r, c(xv, yv, zv), drop = FALSE])]
         if (!length(r)) next
         if (g %in% GG3D_LINES) r <- r[order(g3_num(d[[xv]][r]))]
         sz <- if (!is.null(a$size) && is.numeric(d[[a$size]])) { s <- d[[a$size]][r]; 3 + 9 * (s - min(s, na.rm = TRUE)) / max(1e-9, diff(range(s, na.rm = TRUE))) } else (p$size %||% 1.5) * 2.4
-        col <- if (cont_col) list(color = as.list(g3_num(d[[cvar]][r])), colorscale = list(list(0, "#132B43"), list(1, "#56B1F7")), showscale = TRUE, colorbar = list(title = list(text = sp$labels$colour %||% cvar)))
+        col <- if (cont_col) list(color = as.list(g3_num(d[[cvar]][r])), colorscale = list(list(0, "#132B43"), list(1, "#56B1F7")), showscale = TRUE,
+                                  colorbar = { cv <- g3_num(d[[cvar]][r]); g3_colorbar(sp$labels$colour %||% cvar, suppressWarnings(min(cv, na.rm = TRUE)), suppressWarnings(max(cv, na.rm = TRUE))) })
                else list(color = const_col %||% gr$colour)
         tr <- list(type = "scatter3d", x = as.list(g3_num(d[[xv]][r])), y = as.list(g3_num(d[[yv]][r])), z = as.list(g3_num(d[[zv]][r])),
                    name = if (nzchar(gr$name)) gr$name else GG_GEOMS[[g]]$label, showlegend = nzchar(gr$name), legendgroup = gr$name,
@@ -61,14 +84,14 @@ gg3d_figure <- function(d, sp, warn) {
         traces[[length(traces) + 1]] <- tr
       }
     } else if (g %in% GG3D_SURF) {
-      if (!nzchar(zv %||% "")) { warn("Smoothed surface: choose a Z variable to fit it in 3D."); next }
+      if (!nzchar(zv %||% "")) { warn("3D view \u00b7 Smoother: choose a Z variable to fit a surface."); next }
       any_z <- TRUE
       method <- p$method %||% "lm"
       for (gr in g3_groups(d, if (cont_col) NULL else cvar)) {
         dd <- data.frame(x = g3_num(d[[xv]][gr$rows]), y = g3_num(d[[yv]][gr$rows]), z = g3_num(d[[zv]][gr$rows])); dd <- dd[stats::complete.cases(dd), ]
         if (nrow(dd) < 5) next
         fit <- tryCatch(switch(method, loess = stats::loess(z ~ x + y, data = dd), gam = mgcv::gam(z ~ s(x, y, k = min(20, nrow(dd) - 2)), data = dd), glm = , lm = stats::lm(z ~ x + y, data = dd)),
-                        error = function(e) { warn(paste("Surface not fitted:", conditionMessage(e))); NULL })
+                        error = function(e) { warn(paste("3D view \u00b7 Smoother: the surface could not be fitted.", sanitize_message(conditionMessage(e)))); NULL })
         if (is.null(fit)) next
         gx <- seq(min(dd$x), max(dd$x), length.out = 30); gy <- seq(min(dd$y), max(dd$y), length.out = 30)
         nd <- expand.grid(x = gx, y = gy)
@@ -78,12 +101,12 @@ gg3d_figure <- function(d, sp, warn) {
                                              colorscale = list(list(0, const_col %||% gr$colour), list(1, const_col %||% gr$colour)), showlegend = FALSE, hoverinfo = "x+y+z")
       }
     } else if (g %in% GG3D_DENS) {
-      if (nzchar(zv %||% "")) { warn(sprintf("%s: shown as a density surface only when no Z variable is chosen.", GG_GEOMS[[g]]$label)); next }
+      if (nzchar(zv %||% "")) { warn(sprintf("3D view \u00b7 %s: drawn as a density surface only when no Z variable is chosen.", GG_GEOMS[[g]]$label)); next }
       dd <- data.frame(x = g3_num(d[[xv]]), y = g3_num(d[[yv]])); dd <- dd[stats::complete.cases(dd), ]
       if (nrow(dd) < 5) next
       k <- MASS::kde2d(dd$x, dd$y, n = 40)
       traces[[length(traces) + 1]] <- list(type = "surface", x = as.list(k$x), y = as.list(k$y), z = lapply(seq_along(k$y), function(j) as.list(k$z[, j])), opacity = op,
-                                           colorscale = "Viridis", showscale = TRUE, colorbar = list(title = list(text = "Density")), name = "Kernel density", hoverinfo = "x+y+z")
+                                           colorscale = "Viridis", showscale = TRUE, colorbar = g3_colorbar("Density", min(k$z), max(k$z)), name = "Kernel density", hoverinfo = "x+y+z")
     } else if (g %in% GG3D_BARS) {
       xs <- d[[xv]]; ys <- d[[yv]]
       bin <- function(v) if (is.factor(v)) v else cut(v, breaks = pretty(range(v, na.rm = TRUE), n = 8), include.lowest = TRUE)
@@ -99,15 +122,20 @@ gg3d_figure <- function(d, sp, warn) {
                                                           facecolor = as.list(FC), flatshading = TRUE, opacity = p$alpha %||% 0.9, name = if (nzchar(zv %||% "")) paste("Mean of", zv) else "Count", hoverinfo = "z")
       d[[xv]] <- factor(as.character(bx), levels = rownames(h)); d[[yv]] <- factor(as.character(by), levels = colnames(h))
       if (!nzchar(zv %||% "")) zlab <- "Count"
-    } else warn(sprintf("%s has no 3D equivalent and is not shown in the 3D view.", GG_GEOMS[[g]]$label))
+    } else warn(sprintf("3D view \u00b7 %s: this layer has no 3D version and is left out.", GG_GEOMS[[g]]$label))
   }
-  if (!length(traces)) api_error(422, "gg3d_empty", "None of the layers can be drawn in 3D. Use points, lines, a smoother (with a Z variable), a density or bars.")
+  if (!length(traces)) {
+    warn_out(if (!nzchar(zv %||% "")) "3D view: choose a Z-axis variable to draw these layers in 3D (or add a 2D density, bar or tile layer)."
+             else "3D view: none of these layers can be drawn in 3D. Use points, lines, a smoother, or (without a Z variable) a 2D density, bars or tiles.")
+    return(NULL)
+  }
+  for (w in notes) warn_out(w)
   fam <- c(sans = "Arial, Helvetica, sans-serif", serif = "Times New Roman, Times, serif", mono = "Courier New, monospace")[[sp$theme$family]]
   layout <- list(title = list(text = sp$labels$title %||% "", x = if (isTRUE(sp$theme$centreTitle)) 0.5 else 0.02),
                  font = list(family = fam, size = sp$theme$size), paper_bgcolor = "#ffffff", showlegend = sp$theme$legend != "none",
                  legend = list(orientation = if (sp$theme$legend %in% c("bottom", "top")) "h" else "v", title = list(text = sp$labels$colour %||% sp$labels$fill %||% (sp$aes$colour %||% sp$aes$fill %||% ""))),
                  margin = list(l = 0, r = 0, t = if (nzchar(sp$labels$title %||% "")) 50 else 10, b = 0),
-                 scene = list(xaxis = g3_axis(d[[xv]], sp$labels$x %||% xv), yaxis = g3_axis(d[[yv]], sp$labels$y %||% yv), zaxis = g3_axis(numeric(0), th$zLabel %||% zlab),
+                 scene = list(xaxis = g3_axis(d[[xv]], sp$labels$x %||% xv, sp$axes$x), yaxis = g3_axis(d[[yv]], sp$labels$y %||% yv, sp$axes$y), zaxis = g3_axis(numeric(0), th$zLabel %||% zlab, sp$axes$z),
                               aspectmode = th$aspect %||% "cube", camera = list(eye = list(x = 1.6, y = -1.6, z = 1.1))))
   list(data = traces, layout = layout)
 }

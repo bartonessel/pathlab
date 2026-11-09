@@ -281,3 +281,43 @@ efa_code <- function(o, k, rotate, missing_code) {
   )
   paste(lines, collapse = "\n")
 }
+
+
+#' Factor (EFA) or component (PCA) scores for a Statistics EFA/PCA result: the solution is re-estimated with psych
+#' (as jmv does: same extraction, rotation and number of factors), its factors are matched to the columns of the
+#' loadings table (order and sign, by their loadings), and the scores are those of psych::factor.scores (Thurstone
+#' regression scores) or psych::principal (component scores). Rows with a missing item get no score.
+stats_factor_scores <- function(df, s, res, missing_code = NULL) {
+  o <- s$options
+  vars <- intersect(unlist(o$vars), names(df))
+  lt <- Filter(function(t) identical(t$id, "loadings"), res$tables)
+  if (length(vars) < 3 || !length(lt)) return(NULL)
+  lt <- lt[[1]]
+  fcols <- grep("^pc[0-9]+$", vapply(lt$columns, `[[`, "", "name"), value = TRUE)
+  k <- length(fcols)
+  if (!k) return(NULL)
+  d <- as.data.frame(lapply(df[, vars, drop = FALSE], function(x) suppressWarnings(as.numeric(x))))
+  if (!is.null(missing_code)) d[d == missing_code] <- NA
+  cc <- stats::complete.cases(d)
+  X <- as.matrix(d[cc, , drop = FALSE])
+  is_pca <- identical(s$proc, "pca")
+  rot <- as.character(o$rotation %||% "oblimin")
+  f <- suppressWarnings(suppressMessages(if (is_pca) psych::principal(X, nfactors = k, rotate = rot, scores = TRUE)
+                                         else psych::fa(X, nfactors = k, rotate = rot, fm = as.character(o$extraction %||% "minres"), scores = "regression")))
+  sc <- if (is_pca) f$scores else psych::factor.scores(X, f, method = "Thurstone")$scores
+  # Match psych's factors to the table's columns (blank cells, hidden below the cut-off, count as 0).
+  L <- unclass(f$loadings)[vars, , drop = FALSE]
+  Tm <- sapply(fcols, function(cn) vapply(lt$rows, function(r) { v <- r[[cn]]; if (is.numeric(v)) v else 0 }, 0))
+  rownames(Tm) <- vapply(lt$rows, function(r) as.character(r$name), "")
+  Tm <- Tm[vars, , drop = FALSE]
+  out <- matrix(NA_real_, nrow(sc), k); used <- integer(0)
+  for (j in seq_len(k)) {
+    sim <- vapply(seq_len(ncol(L)), function(m) if (m %in% used) -Inf else abs(sum(L[, m] * Tm[, j])), 0)
+    m <- which.max(sim); used <- c(used, m)
+    out[, j] <- sc[, m] * (if (sum(L[, m] * Tm[, j]) < 0) -1 else 1)
+  }
+  nm <- paste0(if (is_pca) "Component" else "Factor", seq_len(k))
+  colnames(out) <- nm
+  rows <- attr(df, "pl-rows") %||% seq_len(nrow(df))
+  list(nInput = attr(df, "pl-n") %||% nrow(df), rows = rows[cc], tables = list(scores = as.data.frame(out)))
+}

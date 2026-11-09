@@ -14,31 +14,31 @@ STATS_PROCS <- list(
     args = list(vars = "vars", splitBy = "factors", freq = "bool", desc = "enum:columns,rows", n = "bool", missing = "bool", mean = "bool", median = "bool",
                 mode = "bool", sum = "bool", sd = "bool", variance = "bool", range = "bool", min = "bool", max = "bool", se = "bool", ci = "bool", ciWidth = "num",
                 iqr = "bool", skew = "bool", kurt = "bool", sw = "bool", pcEqGr = "bool", pcNEqGr = "num", pc = "bool", pcValues = "string", extreme = "bool", extremeN = "num"),
-    extra = list(normTests = "bool", hist = "bool", dens = "bool", box = "bool", bar = "bool", qq = "bool", violin = "bool", dot = "bool", boxMean = "bool", boxLabelOutliers = "bool")),
+    extra = list(bootCI = "bool", bootN = "num", normTests = "bool", hist = "bool", dens = "bool", box = "bool", bar = "bool", qq = "bool", violin = "bool", dot = "bool", boxMean = "bool", boxLabelOutliers = "bool")),
   ttestIS = list(label = "Independent Samples T-Test", group = "T-Tests", fn = "ttestIS",
     args = list(vars = "vars", group = "factors", students = "bool", bf = "bool", bfPrior = "num", welchs = "bool", mann = "bool", hypothesis = "enum:different,oneGreater,twoGreater",
                 norm = "bool", eqv = "bool", meanDiff = "bool", ci = "bool", ciWidth = "num", effectSize = "bool", ciES = "bool", ciWidthES = "num", desc = "bool", miss = "enum:perAnalysis,listwise"),
-    extra = list(meansPlot = "bool", qq = "bool")),
+    extra = list(meansPlot = "bool", qq = "bool", eqTest = "bool", eqBound = "enum:d,raw", eqLow = "num", eqHigh = "num", eqAlpha = "num", eqPlot = "bool", robust = "bool", trim = "num")),
   ttestPS = list(label = "Paired Samples T-Test", group = "T-Tests", fn = "ttestPS",
     args = list(pairs = "pairs", students = "bool", bf = "bool", bfPrior = "num", wilcoxon = "bool", hypothesis = "enum:different,oneGreater,twoGreater", norm = "bool",
                 meanDiff = "bool", ci = "bool", ciWidth = "num", effectSize = "bool", ciES = "bool", ciWidthES = "num", desc = "bool", miss = "enum:perAnalysis,listwise"),
-    extra = list(meansPlot = "bool", qq = "bool")),
+    extra = list(meansPlot = "bool", qq = "bool", eqTest = "bool", eqBound = "enum:d,raw", eqLow = "num", eqHigh = "num", eqAlpha = "num", eqPlot = "bool", robust = "bool", trim = "num")),
   ttestOneS = list(label = "One Sample T-Test", group = "T-Tests", fn = "ttestOneS",
     args = list(vars = "vars", students = "bool", bf = "bool", bfPrior = "num", wilcoxon = "bool", testValue = "num", hypothesis = "enum:dt,gt,lt", norm = "bool",
                 meanDiff = "bool", ci = "bool", ciWidth = "num", effectSize = "bool", ciES = "bool", ciWidthES = "num", desc = "bool", miss = "enum:perAnalysis,listwise"),
-    extra = list(meansPlot = "bool", qq = "bool")),
+    extra = list(meansPlot = "bool", qq = "bool", eqTest = "bool", eqBound = "enum:d,raw", eqLow = "num", eqHigh = "num", eqAlpha = "num", eqPlot = "bool")),
   anovaOneW = list(label = "One-Way ANOVA", group = "ANOVA", fn = "anovaOneW",
     args = list(deps = "vars", group = "factors", welchs = "bool", fishers = "bool", miss = "enum:perAnalysis,listwise", desc = "bool", norm = "bool", eqv = "bool",
                 phMethod = "enum:none,gamesHowell,tukey", phMeanDif = "bool", phSig = "bool", phTest = "bool", phFlag = "bool"),
-    extra = list(meansPlot = "bool", qq = "bool")),
+    extra = list(meansPlot = "bool", qq = "bool", robust = "bool", trim = "num")),
   ANOVA = list(label = "ANOVA", group = "ANOVA", fn = "ANOVA",
     args = list(dep = "var", factors = "factors", effectSize = "enums:eta,partEta,omega", modelTest = "bool", ss = "enum:1,2,3", homo = "bool", norm = "bool",
                 postHoc = "terms", postHocCorr = "enums:none,tukey,scheffe,bonf,holm", postHocES = "enums:d", emMeans = "terms", emmTables = "bool"),
-    extra = list(meansPlot = "bool", qq = "bool")),
+    extra = list(meansPlot = "bool", qq = "bool", contrastType = "enum:none,deviation,simple,difference,helmert,repeated,polynomial", robust = "bool", trim = "num")),
   ancova = list(label = "ANCOVA", group = "ANOVA", fn = "ancova",
     args = list(dep = "var", factors = "factors", covs = "vars", effectSize = "enums:eta,partEta,omega", modelTest = "bool", ss = "enum:1,2,3", homo = "bool", norm = "bool",
                 postHoc = "terms", postHocCorr = "enums:none,tukey,scheffe,bonf,holm", postHocES = "enums:d", emMeans = "terms", emmTables = "bool"),
-    extra = list(meansPlot = "bool", qq = "bool")),
+    extra = list(meansPlot = "bool", qq = "bool", contrastType = "enum:none,deviation,simple,difference,helmert,repeated,polynomial", robust = "bool", trim = "num")),
   anovaRM = list(label = "Repeated Measures ANOVA", group = "ANOVA", fn = "anovaRM",
     args = list(rmMeasures = "vars", rmLabel = "string", bs = "factors", cov = "vars", effectSize = "enums:eta,partEta,ges,omega", spherTests = "bool",
                 spherCorr = "enums:none,GG,HF", leveneTest = "bool", postHoc = "terms", postHocCorr = "enums:none,tukey,scheffe,bonf,holm", groupSumm = "bool"),
@@ -49,14 +49,16 @@ STATS_PROCS <- list(
     args = list(measures = "vars", pairs = "bool", desc = "bool")),
   corrMatrix = list(label = "Correlation Matrix", group = "Regression", fn = "corrMatrix",
     args = list(vars = "vars", pearson = "bool", spearman = "bool", kendall = "bool", sig = "bool", flag = "bool", n = "bool", ci = "bool", ciWidth = "num",
-                hypothesis = "enum:corr,pos,neg")),
+                hypothesis = "enum:corr,pos,neg"),
+    extra = list(eqTest = "bool", eqLow = "num", eqHigh = "num", eqAlpha = "num", eqPlot = "bool", bootCI = "bool", bootN = "num")),
   corrPart = list(label = "Partial Correlation", group = "Regression", fn = "corrPart",
     args = list(vars = "vars", controls = "vars", pearson = "bool", spearman = "bool", kendall = "bool", type = "enum:part,semi", sig = "bool", flag = "bool", n = "bool",
                 hypothesis = "enum:corr,pos,neg")),
   contTables = list(label = "Contingency Tables", group = "Frequencies", fn = "contTables",
     args = list(rows = "factors", cols = "factors", layers = "factors", chiSq = "bool", chiSqCorr = "bool", zProp = "bool", likeRat = "bool", fisher = "bool", contCoef = "bool",
                 phiCra = "bool", logOdds = "bool", odds = "bool", relRisk = "bool", ci = "bool", ciWidth = "num", gamma = "bool", taub = "bool", mh = "bool",
-                obs = "bool", exp = "bool", pcRow = "bool", pcCol = "bool", pcTot = "bool")),
+                obs = "bool", exp = "bool", pcRow = "bool", pcCol = "bool", pcTot = "bool"),
+    extra = list(bfCont = "bool", bfSample = "enum:indepMulti,jointMulti,poisson,hypergeom")),
   contTablesPaired = list(label = "Paired Samples Contingency Tables (McNemar)", group = "Frequencies", fn = "contTablesPaired",
     args = list(rows = "factors", cols = "factors", chiSq = "bool", chiSqCorr = "bool", exact = "bool", pcRow = "bool", pcCol = "bool")),
   propTest2 = list(label = "Binomial Test", group = "Frequencies", fn = "propTest2",
@@ -67,6 +69,8 @@ STATS_PROCS <- list(
     args = list(vars = "vars", rscale = "enum:medium,wide,ultrawide")),
   banova = list(label = "Bayesian ANOVA", group = "ANOVA", fn = NULL,
     args = list(dep = "var", factors = "factors", rscale = "enum:medium,wide,ultrawide", seed = "num")),
+  banovaRM = list(label = "Bayesian Repeated Measures ANOVA", group = "ANOVA", fn = NULL, engine = "BayesFactor",
+    args = list(measures = "vars", bs = "factors", rmLabel = "string", rscale = "enum:medium,wide,ultrawide", seed = "num")),
   km = list(label = "Kaplan-Meier Survival", group = "Survival", fn = NULL, engine = "survival",
     args = list(time = "var", event = "any", eventLevel = "string", group = "factors", ciWidth = "num", logrank = "bool", times = "string")),
   cox = list(label = "Cox Regression", group = "Survival", fn = NULL, engine = "survival",
@@ -168,7 +172,23 @@ STATS_PROCS <- list(
     extra = list(pathDiagram = "bool")),   # drawn in the browser from the estimates (jamovi draws it with semPlot)
   reliability = list(label = "Reliability Analysis", group = "Factor", fn = "reliability",
     args = list(vars = "vars", alphaScale = "bool", omegaScale = "bool", meanScale = "bool", sdScale = "bool", alphaItems = "bool", omegaItems = "bool",
-                meanItems = "bool", sdItems = "bool", itemRestCor = "bool", revItems = "vars"))
+                meanItems = "bool", sdItems = "bool", itemRestCor = "bool", revItems = "vars")),
+  kappa = list(label = "Rater Agreement (Kappa)", group = "Factor", fn = NULL, engine = "irr",
+    args = list(raters = "factors", weights = "enum:none,linear,quadratic", crosstab = "bool", categories = "bool", pairwise = "bool", light = "bool",
+                kripp = "bool", krippLevel = "enum:nominal,ordinal,interval,ratio", ciWidth = "num")),
+  nca = list(label = "Necessary Condition Analysis (NCA)", group = "Regression", fn = NULL, engine = "NCA",
+    args = list(conditions = "vars", outcome = "var", ceilings = "enums:ce_fdh,cr_fdh,c_lp,ce_vrs,cr_vrs,cols,qr,ols", testRep = "num", corner = "enum:1,2,3,4",
+                scopeMin = "num", scopeMax = "num", steps = "num", outliers = "bool", power = "bool", powerEffect = "num", powerRep = "num", seed = "num")),
+  svy = list(label = "Survey-Weighted Analysis", group = "Regression", fn = NULL, engine = "survey",
+    args = list(dep = "var", covs = "vars", factors = "factors", weights = "var", strata = "any", cluster = "any", family = "enum:gaussian,binomial")),
+  did = list(label = "Difference-in-Differences", group = "Regression", fn = NULL, engine = "sandwich",
+    args = list(dep = "var", treat = "any", post = "any", covs = "vars", factors = "factors", cluster = "any")),
+  psm = list(label = "Propensity Score Matching", group = "Regression", fn = NULL, engine = "MatchIt",
+    args = list(dep = "var", treat = "any", covs = "vars", factors = "factors", method = "enum:nearest,exact,subclass", ratio = "num", caliper = "num", replace = "bool", seed = "num")),
+  ipw = list(label = "Inverse Probability Weighting", group = "Regression", fn = NULL, engine = "sandwich",
+    args = list(dep = "var", treat = "any", covs = "vars", factors = "factors", estimand = "enum:ATE,ATT", stabilized = "bool", trim = "num")),
+  icc = list(label = "Intraclass Correlation (ICC)", group = "Factor", fn = NULL, engine = "irr",
+    args = list(raters = "vars", model = "enum:oneway,random,mixed", type = "enum:agreement,consistency", ciWidth = "num", testValue = "num", allForms = "bool", desc = "bool"))
 )
 
 stats_type <- function(t) sub(":.*$", "", t)
@@ -277,6 +297,12 @@ validate_stats <- function(df, s) {
     propTest2 = if (!length(s$options$vars)) "Add at least one variable.",
     propTestN = if (is.null(s$options$var)) "Add a variable.",
     reliability = if (length(s$options$vars) < 2) "Add at least two items.",
+    kappa = , icc = if (length(s$options$raters) < 2) "Add at least two raters (one column per rater).",
+    nca = if (!length(s$options$conditions) || is.null(s$options$outcome)) "Add at least one condition and the outcome.",
+    svy = if (is.null(s$options$dep) || is.null(s$options$weights)) "Add the dependent variable and the sampling weight.",
+    did = if (is.null(s$options$dep) || is.null(s$options$treat) || is.null(s$options$post)) "Add the outcome, the treatment group (0/1) and the period (0 = before, 1 = after).",
+    psm = if (is.null(s$options$treat) || !length(c(s$options$covs, s$options$factors))) "Add the treatment (0/1) and at least one covariate.",
+    ipw = if (is.null(s$options$dep) || is.null(s$options$treat) || !length(c(s$options$covs, s$options$factors))) "Add the outcome, the treatment (0/1) and at least one covariate.",
     efa = , pca = if (length(s$options$vars) < 3) "Add at least three variables.",
     cfa = {
       fs <- Filter(function(f) length(f$vars) > 0, s$options$factors %||% list())
@@ -313,6 +339,7 @@ validate_stats <- function(df, s) {
     qc = if (is.null(s$options$measure)) "Add the measurement variable.",
     capability = if (is.null(s$options$measure) || (is.null(s$options$lsl) && is.null(s$options$usl))) "Add the measurement variable and a specification limit.",
     banova = if (is.null(s$options$dep) || !length(s$options$factors)) "Add the dependent variable and at least one factor.",
+    banovaRM = if (length(s$options$measures) < 2) "Add at least two repeated measures.",
     plotBar = if (is.null(s$options$var)) "Add a variable.",
     plotBox = if (!length(s$options$vars)) "Add at least one variable.",
     plotHist = if (is.null(s$options$var)) "Add a variable.",
@@ -634,6 +661,9 @@ run_stats_core <- function(df, s, missing_code = NULL) {
   d <- prep$data
   o <- s$options
   args <- o[intersect(names(o), names(def$args))]
+  # Planned contrasts (jamovi's Contrasts): one contrast type for every factor.
+  if (s$proc %in% c("ANOVA", "ancova") && !is.null(o$contrastType) && o$contrastType != "none")
+    args$contrasts <- lapply(o$factors, function(f) list(var = f, type = o$contrastType))
   # Translations to jmv's argument forms.
   if (s$proc == "anovaRM") {
     lab <- if (nzchar(o$rmLabel %||% "")) o$rmLabel else "RM Factor 1"
@@ -722,6 +752,19 @@ run_stats_core <- function(df, s, missing_code = NULL) {
     }
   }
   if (s$proc %in% names(TEST_PLOT_PROCS) && (isTRUE(o$meansPlot) || isTRUE(o$qq))) plots <- c(plots, test_plots(s$proc, d, o))
+  # Equivalence test (TOST) added by PathLab: its own section after jamovi's tables.
+  if (s$proc %in% TOST_PROCS && isTRUE(o$eqTest)) {
+    eq <- run_tost(s$proc, d, o)
+    if (!is.null(eq)) { tables <- c(tables, eq$tables); if (isTRUE(o$eqPlot) && !is.null(eq$plot)) plots <- c(plots, list(c(eq$plot, list(section = "Equivalence Test")))) }
+  }
+  # Robust tests (WRS2), bootstrap intervals (boot) and the Bayesian contingency table (BayesFactor), added by PathLab.
+  extra_pkgs <- character(0)
+  if (s$proc %in% ROBUST_PROCS && isTRUE(o$robust)) { tables <- c(tables, run_robust(s$proc, d, o)); extra_pkgs <- c(extra_pkgs, "WRS2") }
+  if (s$proc %in% BOOT_PROCS && isTRUE(o$bootCI)) { tables <- c(tables, run_boot(s$proc, d, o)); extra_pkgs <- c(extra_pkgs, "boot") }
+  if (s$proc == "contTables" && isTRUE(o$bfCont) && length(o$rows) && length(o$cols)) {
+    if (!requireNamespace("BayesFactor", quietly = TRUE)) api_error(501, "stats_unavailable", "The BayesFactor R package is not installed on the analysis server.")
+    tables <- c(tables, list(run_bf_contingency(d, o))); extra_pkgs <- c(extra_pkgs, "BayesFactor")
+  }
   # Errors jmv reports inside the results (e.g. too few cases) become warnings.
   code <- tryCatch(res$analysis$asSource(), error = function(e) "")
   list(
@@ -731,7 +774,7 @@ run_stats_core <- function(df, s, missing_code = NULL) {
     tables = tables, plots = plots, plotsAt = plots_at,
     warnings = as.list(unique(warns)),
     rCode = stats_code(s, prep, missing_code, code),
-    packages = list(jmv = as.character(utils::packageVersion("jmv"))),
+    packages = c(list(jmv = as.character(utils::packageVersion("jmv"))), setNames(lapply(extra_pkgs, function(p) as.character(utils::packageVersion(p))), extra_pkgs)),
     durationSeconds = as.numeric(difftime(Sys.time(), t0, units = "secs"))
   )
 }
@@ -751,7 +794,14 @@ stats_code <- function(s, prep, missing_code, jmv_src) {
   pre <- if (s$proc != "descriptives" && uses_nortest(s$proc, s$options)) c("", "# Normality of the assumption check with all three tests (PathLab SEM): Shapiro-Wilk, Lilliefors-corrected",
       "# Kolmogorov-Smirnov and Anderson-Darling, applied to the values jmv tests (variables, paired differences or residuals):",
       "library(nortest)", "norm3 <- function(x) list(sw = shapiro.test(x), ks = lillie.test(x), ad = ad.test(x))") else character(0)
-  paste(c(lines, pre, "", jmv_src, extra), collapse = "\n")
+  # jmv's asSource() leaves the right-hand side of the ANOVA / ANCOVA formula empty ("y ~ ,"), which does not run:
+  # write jamovi's default model (all factor interactions plus the covariates' main effects).
+  if (s$proc %in% c("ANOVA", "ancova")) {
+    bt <- function(x) ifelse(make.names(x) == x, x, paste0("`", x, "`"))
+    rhs <- c(if (length(s$options$factors)) paste(bt(unlist(s$options$factors)), collapse = " * "), if (length(s$options$covs)) bt(unlist(s$options$covs)))
+    jmv_src <- sub("formula = [^\n]*~ *,", paste0("formula = ", bt(s$options$dep), " ~ ", paste(rhs, collapse = " + "), ","), jmv_src)
+  }
+  paste(c(lines, pre, "", jmv_src, extra, tost_code(s, q), robust_code(s, q)), collapse = "\n")
 }
 
 # ---- Report, workbook and APA tables (generic over the converted jmv tables) ------------------------------
@@ -816,7 +866,7 @@ stats_body_html <- function(res) {
   esc <- html_escape
   S <- character(0); a <- function(...) S <<- c(S, paste0(...))
   a("<h2>", esc(res$label), "</h2>")
-  a("<p>Computed with ", if (!is.null(res$packages$R)) paste("R", esc(res$packages$R), "(base graphics and stats)") else if (!is.null(res$packages$survival)) paste("survival", esc(res$packages$survival)) else if (!is.null(res$packages$qcc)) paste("qcc", esc(res$packages$qcc)) else if (!is.null(res$packages$BayesFactor)) paste("BayesFactor", esc(res$packages$BayesFactor), "(as in JASP)") else paste0("jmv ", esc(res$packages$jmv), " (jamovi's R package)"),
+  a("<p>Computed with ", if (!is.null(res$packages$R)) paste("R", esc(res$packages$R), "(base graphics and stats)") else if (!is.null(res$packages$survival)) paste("survival", esc(res$packages$survival)) else if (!is.null(res$packages$qcc)) paste("qcc", esc(res$packages$qcc)) else if (!is.null(res$packages$BayesFactor)) paste("BayesFactor", esc(res$packages$BayesFactor), "(as in JASP)") else if (is.null(res$packages$jmv) && length(res$packages)) paste(esc(names(res$packages)[1]), esc(res$packages[[1]])) else paste0("jmv ", esc(res$packages$jmv), " (jamovi's R package)"),
     if (identical(res$proc, "descriptives") && isTRUE(res$options$normTests)) " and nortest" else "", ".</p>")
   for (w in ul(res$warnings)) a("<div class=\"warn\">", esc(w), "</div>")
   for (pl in res$plots) if (identical(pl$type, "image")) a("<figure><img alt=\"", esc(pl$alt %||% "Plot"), "\" style=\"max-width:100%\" src=\"data:image/png;base64,", pl$png, "\"></figure>")
@@ -1080,8 +1130,13 @@ run_capability <- function(d, o) {
   q <- if (is.null(sub)) qcc::qcc(x[ok], type = "xbar.one", plot = FALSE) else qcc::qcc(qcc::qcc.groups(x[ok], sub[ok]), type = "xbar", plot = FALSE)
   if (is.null(o$lsl) && is.null(o$usl)) api_error(422, "qc_spec", "Give at least one specification limit (LSL or USL).")
   spec <- c(o$lsl %||% NA, o$usl %||% NA)
-  pc <- qcc::process.capability(q, spec.limits = spec, target = o$target %||% NULL, print = FALSE)
+  # Without a target, qcc uses the middle of the limits (or the one limit given); passing target = NULL fails in qcc.
+  pc <- if (is.null(o$target)) qcc::process.capability(q, spec.limits = spec, print = FALSE)
+        else qcc::process.capability(q, spec.limits = spec, target = o$target, print = FALSE)
   ind <- pc$indices
+  # One-sided specification: Cpk is the index of the side that has a limit (qcc leaves it empty).
+  one <- if (is.null(o$usl)) "Cp_l" else if (is.null(o$lsl)) "Cp_u" else NULL
+  if (!is.null(one) && "Cp_k" %in% rownames(ind) && one %in% rownames(ind) && is.na(ind["Cp_k", 1])) ind["Cp_k", ] <- ind[one, ]
   rows <- lapply(seq_len(nrow(ind)), function(i) list(index = rownames(ind)[i], value = stats_cell(ind[i, 1]), lower = stats_cell(ind[i, 2]), upper = stats_cell(ind[i, 3])))
   tables <- list(
     list(id = "cap_indices", title = "Process Capability Indices", columns = list(stats_col("index", "Index", "text"), stats_col("value", "Value"), stats_col("lower", "2.5%", superTitle = "95% CI"), stats_col("upper", "97.5%", superTitle = "95% CI")),
@@ -1312,6 +1367,16 @@ stats_plot_code <- function(s, missing_code) {
 
 # ---- References (jamovi lists them under the results) ------------------------------------------------------------
 STATS_REF_CACHE <- new.env()
+# Packages whose citation() authors are malformed (irr 0.84.1 merges two authors and puts an e-mail address as a surname).
+PKG_AUTHORS <- list(irr = c("Matthias Gamer", "Jim Lemon", "Ian Fellows", "Puspendra Singh"))
+#' The first citation() entry of R or a package, without e-mail addresses in the author list.
+pkg_citation <- function(p) {
+  cit <- if (p == "R") utils::citation() else utils::citation(p)
+  b <- cit[[1]]
+  if (!is.null(PKG_AUTHORS[[p]])) b$author <- utils::as.person(PKG_AUTHORS[[p]])
+  else if (length(b$author)) b$author <- do.call(c, lapply(seq_along(b$author), function(i) { a <- b$author[i]; utils::person(given = a$given, family = a$family, role = a$role) }))
+  b
+}
 #' Text references of R and the packages that computed a result, from citation() (so they always match the versions installed).
 #' jmv, the engine of the Statistics analyses, is always cited.
 stats_references <- function(pkgs) {
@@ -1319,8 +1384,7 @@ stats_references <- function(pkgs) {
   out <- character(0)
   for (p in pkgs) {
     if (is.null(STATS_REF_CACHE[[p]])) STATS_REF_CACHE[[p]] <- tryCatch({
-      cit <- if (p == "R") utils::citation() else utils::citation(p)
-      gsub("\\s+", " ", paste(format(cit[[1]], style = "text"), collapse = " "))
+      gsub("\\s+", " ", paste(format(pkg_citation(p), style = "text"), collapse = " "))
     }, error = function(e) "")
     if (nzchar(STATS_REF_CACHE[[p]])) out <- c(out, STATS_REF_CACHE[[p]])
   }

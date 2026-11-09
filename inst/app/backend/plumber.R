@@ -227,7 +227,7 @@ function(req, pid, did, offset = 0, limit = 500) {
   if (is.na(off) || off < 0) off <- 0L
   if (is.na(lim) || lim < 1) lim <- 500L
   lim <- min(lim, 2000L)
-  list(offset = off, total = nrow(ds$data), rows = dataset_rows(ds$data, off, lim))
+  list(offset = off, total = nrow(ds$data), rows = dataset_rows_json(ds$data, off, lim))
 }
 
 #* The uploaded file exactly as received (used to embed the data in a project file at the user's request)
@@ -329,6 +329,20 @@ function(req, res, pid, did) {
   job_payload(job)
 }
 
+#* QCA calibration preview: each set's anchors in the data's units, its range, and crisp category counts.
+#* Body: {"spec": QCA spec, "missingCode"}
+#* @tag analyses
+#* @post /api/projects/<pid>/datasets/<did>/qca/anchors
+#* @serializer unboxedJSON list(null = "null", na = "null", digits = NA)
+function(req, pid, did) {
+  p <- project_of(req, pid)
+  ds <- get_dataset(p, did)
+  body <- parse_json_body(req)
+  code <- body$missingCode
+  if (!is.null(code)) code <- suppressWarnings(as.numeric(code))
+  qca_anchor_preview(ds$data, normalize_qca(body$spec), if (is.null(code) || is.na(code)) NULL else code)
+}
+
 #* QCA with more than 7 conditions: suggest the k best (default 7), with a reason for every condition (see qca_select_conditions).
 #* Body: {"spec": QCA spec, "k": 7, "missingCode"}
 #* @tag analyses
@@ -401,9 +415,14 @@ function(req, pid, did) {
   code <- body$missingCode
   if (!is.null(code)) code <- suppressWarnings(as.numeric(code))
   if (!is.null(code) && is.na(code)) api_error(400, "invalid_code", "The missing-value code must be a number.")
-  res <- run_stats(stats_prefilter(ds$data, body$filters, body$weights), normalize_stats(body), code)
-  w <- as.character(body$weights %||% "")[1]; nf <- length(unlist(body$filters %||% list()))
-  if (nf || (!is.na(w) && nzchar(w))) res$warnings <- c(res$warnings, list(paste0(if (nf) sprintf("Row filters applied (%d active). ", nf) else "", if (!is.na(w) && nzchar(w)) sprintf("Weighted by %s (frequency weights).", w) else "")))
+  fdf <- stats_prefilter(ds$data, body$filters, body$weights)
+  sreq <- normalize_stats(body)
+  res <- run_stats(fdf, sreq, code)
+  # EFA / PCA: factor or component scores that can be saved as variables (Save scores under the result).
+  if (sreq$proc %in% c("efa", "pca")) res$.derived <- tryCatch(stats_factor_scores(fdf, sreq, res, code), error = function(e) NULL)
+  # Active row filters are not noted under each table (the Filters panel and the sheet show them); weights are.
+  w <- as.character(body$weights %||% "")[1]
+  if (!is.na(w) && nzchar(w)) res$warnings <- c(res$warnings, list(sprintf("Weighted by %s (frequency weights).", w)))
   store_result(p, "stats", res, did)
 }
 
@@ -862,6 +881,16 @@ function(req, res, pid) {
            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 }
 
+#* PDF of the help center's ebook, from the paginated HTML the browser built. Body: {"html", "filename"}
+#* @tag help
+#* @post /api/projects/<pid>/help-book.pdf
+function(req, res, pid) {
+  project_of(req, pid)
+  b <- parse_json_body(req)
+  pdf <- help_book_pdf(as.character(b$html %||% ""))
+  download(res, pdf, as.character(b$filename %||% "PathLab_SEM_guide.pdf"), "application/pdf")
+}
+
 #* Bibliometric report of the filtered collection. Body: {"filters", "sections": [...], "figures": [{"png", "caption", "section"}], "format": "html" | "docx"}
 #* @tag bibliometrics
 #* @post /api/projects/<pid>/biblio/report
@@ -1315,6 +1344,13 @@ function(req, pid) ai_chat(project_of(req, pid), parse_json_body(req))
 #* @post /api/projects/<pid>/ai/edit
 #* @serializer unboxedJSON list(null = "null", na = "null", digits = NA)
 function(req, pid) ai_edit(project_of(req, pid), parse_json_body(req))
+
+#* Read a picture of a path model into constructs, indicators (matched to the column names) and paths; nothing is drawn.
+#* Body: {image (base64), mediaType, columns, provider, model, consent}
+#* @tag ai
+#* @post /api/projects/<pid>/ai/model-from-image
+#* @serializer unboxedJSON list(null = "null", na = "null", digits = NA)
+function(req, pid) ai_model_from_image(project_of(req, pid), parse_json_body(req))
 
 #* What was sent to AI providers in this session (most recent first).
 #* @tag ai

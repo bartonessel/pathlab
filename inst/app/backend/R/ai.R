@@ -1,4 +1,5 @@
-# Generative AI assistant (Phase 7): one provider layer for Anthropic Claude, OpenAI, Google Gemini and Azure OpenAI,
+# Generative AI assistant (Phase 7): one provider layer for Anthropic Claude, OpenAI, Google Gemini, Azure OpenAI and the
+# OpenAI-compatible chat APIs of DeepSeek, Moonshot Kimi and Alibaba Qwen,
 # a fact sheet built from the stored results R produced, a curated bibliography, and the grounded writer, chat and edit
 # actions. API keys live only in this process's memory (per project session) or in environment variables on the
 # server; they are never written to disk, project files or reports, and are never returned by the API.
@@ -8,8 +9,22 @@ AI_PROVIDERS <- list(
   anthropic = list(label = "Anthropic Claude", env = "ANTHROPIC_API_KEY", models = c("claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"), api = "Messages API"),
   openai = list(label = "OpenAI", env = "OPENAI_API_KEY", models = c("gpt-5", "gpt-5-mini"), api = "Responses API"),
   gemini = list(label = "Google Gemini", env = c("GEMINI_API_KEY", "GOOGLE_API_KEY"), models = c("gemini-2.5-pro", "gemini-2.5-flash"), api = "Gemini API"),
-  azure = list(label = "Microsoft Azure OpenAI", env = "AZURE_OPENAI_API_KEY", models = character(0), api = "Azure OpenAI (deployment name as model)")
+  azure = list(label = "Microsoft Azure OpenAI", env = "AZURE_OPENAI_API_KEY", models = character(0), api = "Azure OpenAI (deployment name as model)"),
+  # OpenAI-compatible chat completions. The base address can be changed on the server (for example to the mainland
+  # China endpoints, whose keys differ from the international ones). maxOut: the output-token ceiling of the API.
+  deepseek = list(label = "DeepSeek", env = "DEEPSEEK_API_KEY", models = c("deepseek-chat", "deepseek-reasoner"), api = "DeepSeek API (OpenAI-compatible)",
+                  base = "https://api.deepseek.com", baseEnv = "DEEPSEEK_BASE_URL", images = FALSE, maxOut = c(`deepseek-chat` = 8192)),
+  kimi = list(label = "Moonshot Kimi", env = c("MOONSHOT_API_KEY", "KIMI_API_KEY"), models = c("kimi-k2-turbo-preview", "kimi-k2-thinking", "kimi-latest"), api = "Moonshot API (OpenAI-compatible)",
+              base = "https://api.moonshot.ai/v1", baseEnv = "MOONSHOT_BASE_URL", images = TRUE),
+  qwen = list(label = "Alibaba Qwen", env = c("DASHSCOPE_API_KEY", "QWEN_API_KEY"), models = c("qwen-plus", "qwen-max", "qwen-flash", "qwen-vl-max"), api = "Model Studio / DashScope (OpenAI-compatible)",
+              base = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", baseEnv = "DASHSCOPE_BASE_URL", images = TRUE, maxOut = c(`qwen-max` = 8192, `qwen-vl-max` = 8192))
 )
+AI_COMPAT <- c("deepseek", "kimi", "qwen")
+ai_base_url <- function(provider) {
+  p <- AI_PROVIDERS[[provider]]
+  u <- sub("/+$", "", trimws(Sys.getenv(p$baseEnv %||% "")))
+  if (nzchar(u) && grepl("^https://[A-Za-z0-9.-]+(:[0-9]+)?(/.*)?$", u)) u else p$base
+}
 AZURE_API_VERSION <- "2024-10-21"
 AI_MAX_FACT_CHARS <- 200000
 
@@ -23,7 +38,7 @@ ai_state <- function(proj) {
 ai_check_provider <- function(provider) {
   provider <- as.character(provider %||% "")[1]
   ok <- provider %in% names(AI_PROVIDERS) || (identical(provider, "mock") && ai_mock_enabled())
-  if (!ok) api_error(400, "ai_provider", "Unknown AI provider.", "Choose Anthropic Claude, OpenAI, Google Gemini or Azure OpenAI.")
+  if (!ok) api_error(400, "ai_provider", "Unknown AI provider.", "Choose Anthropic Claude, OpenAI, Google Gemini, Azure OpenAI, DeepSeek, Moonshot Kimi or Alibaba Qwen.")
   provider
 }
 
@@ -93,7 +108,8 @@ ai_perform <- function(req, key) {
 }
 
 #' messages: list of list(role = "user" | "assistant", content = text). Returns text, token use and the model used.
-ai_complete <- function(proj, provider, model, system, messages, max_tokens = 4000, purpose = "request") {
+#' image: optional list(mediaType, data = base64) sent with the last user message (every provider reads images).
+ai_complete <- function(proj, provider, model, system, messages, max_tokens = 4000, purpose = "request", image = NULL) {
   provider <- ai_check_provider(provider)
   model <- trimws(as.character(model %||% "")[1])
   if (!nzchar(model)) model <- AI_PROVIDERS[[provider]]$models[1] %||% ""
@@ -103,20 +119,44 @@ ai_complete <- function(proj, provider, model, system, messages, max_tokens = 40
   k <- if (provider == "mock") list(key = "", source = "environment") else ai_key(proj, provider)
   if (is.null(k)) api_error(400, "ai_no_key", paste0("No API key is set for ", AI_PROVIDERS[[provider]]$label, "."), "Open AI settings and paste your own API key, or set the environment variable on the server.")
   key <- k$key
+  if (!is.null(image) && isFALSE(AI_PROVIDERS[[provider]]$images))
+    api_error(400, "ai_no_images", paste0(AI_PROVIDERS[[provider]]$label, "'s API does not read pictures."), "Choose Claude, OpenAI, Gemini, Kimi or Qwen (a vision model such as qwen-vl-max) for this.")
+  cap <- AI_PROVIDERS[[provider]]$maxOut
+  if (!is.null(cap) && model %in% names(cap)) max_tokens <- min(max_tokens, cap[[model]])
   msgs <- lapply(messages, function(m) list(role = if (identical(m$role, "assistant")) "assistant" else "user", content = as.character(m$content %||% "")))
+  last <- length(msgs)
+  # The last user message with the image, in each provider's own format (text-only messages stay plain strings).
+  with_image <- function(fmt) {
+    if (is.null(image)) return(msgs)
+    m <- msgs; txt <- m[[last]]$content; url <- paste0("data:", image$mediaType, ";base64,", image$data)
+    m[[last]]$content <- switch(fmt,
+      anthropic = list(list(type = "image", source = list(type = "base64", media_type = image$mediaType, data = image$data)), list(type = "text", text = txt)),
+      openai = list(list(type = "input_image", image_url = url), list(type = "input_text", text = txt)),
+      azure = , compat = list(list(type = "image_url", image_url = list(url = url)), list(type = "text", text = txt)))
+    m
+  }
   t0 <- Sys.time()
-  out <- switch(provider,
-    mock = ai_mock_reply(system, msgs),
+  # One chat-completions reply (Azure and the OpenAI-compatible providers) into text, token use and the stop reason.
+  chat_out <- function(b) {
+    ch <- (b$choices %||% list())[[1]] %||% list()
+    list(text = ch$message$content %||% "", input = b$usage$prompt_tokens %||% 0, output = b$usage$completion_tokens %||% 0, model = b$model %||% model,
+         stop = if (identical(ch$finish_reason, "length")) "max_tokens" else ch$finish_reason %||% "")
+  }
+  out <- if (provider %in% AI_COMPAT) {
+    chat_out(ai_perform(httr2::req_body_json(httr2::req_auth_bearer_token(httr2::request(paste0(ai_base_url(provider), "/chat/completions")), key),
+                                              list(model = model, max_tokens = max_tokens, messages = c(list(list(role = "system", content = system)), with_image("compat")))), key))
+  } else switch(provider,
+    mock = if (is.null(image)) ai_mock_reply(system, msgs) else ai_mock_image_reply(msgs),
     anthropic = {
       b <- ai_perform(httr2::req_body_json(httr2::req_headers(httr2::request("https://api.anthropic.com/v1/messages"), `x-api-key` = key, `anthropic-version` = "2023-06-01", .redact = "x-api-key"),
-                                            list(model = model, max_tokens = max_tokens, system = system, messages = msgs)), key)
+                                            list(model = model, max_tokens = max_tokens, system = system, messages = with_image("anthropic"))), key)
       list(text = paste(vapply(Filter(function(x) identical(x$type, "text"), b$content %||% list()), function(x) x$text, ""), collapse = ""),
            input = b$usage$input_tokens %||% 0, output = b$usage$output_tokens %||% 0, model = b$model %||% model, stop = b$stop_reason %||% "")
     },
     openai = {
       b <- ai_perform(httr2::req_body_json(httr2::req_auth_bearer_token(httr2::request("https://api.openai.com/v1/responses"), key),
                                             list(model = model, instructions = system, max_output_tokens = max_tokens,
-                                                 input = lapply(msgs, function(m) list(role = m$role, content = m$content)))), key)
+                                                 input = lapply(with_image("openai"), function(m) list(role = m$role, content = m$content)))), key)
       txt <- unlist(lapply(b$output %||% list(), function(o) if (identical(o$type, "message")) vapply(Filter(function(c) identical(c$type, "output_text"), o$content %||% list()), function(c) c$text, "") else character(0)))
       list(text = paste(txt, collapse = ""), input = b$usage$input_tokens %||% 0, output = b$usage$output_tokens %||% 0, model = b$model %||% model,
            stop = if (identical(b$status, "incomplete")) "max_tokens" else b$status %||% "")
@@ -125,7 +165,10 @@ ai_complete <- function(proj, provider, model, system, messages, max_tokens = 40
       url <- paste0("https://generativelanguage.googleapis.com/v1beta/models/", utils::URLencode(model, reserved = TRUE), ":generateContent")
       b <- ai_perform(httr2::req_body_json(httr2::req_headers(httr2::request(url), `x-goog-api-key` = key, .redact = "x-goog-api-key"),
                                             list(systemInstruction = list(parts = list(list(text = system))),
-                                                 contents = lapply(msgs, function(m) list(role = if (m$role == "assistant") "model" else "user", parts = list(list(text = m$content)))),
+                                                 contents = lapply(seq_along(msgs), function(i) { m <- msgs[[i]]
+                                                   parts <- list(list(text = m$content))
+                                                   if (!is.null(image) && i == last) parts <- c(list(list(inline_data = list(mime_type = image$mediaType, data = image$data))), parts)
+                                                   list(role = if (m$role == "assistant") "model" else "user", parts = parts) }),
                                                  generationConfig = list(maxOutputTokens = max_tokens))), key)
       cand <- (b$candidates %||% list())[[1]] %||% list()
       list(text = paste(vapply(cand$content$parts %||% list(), function(p) p$text %||% "", ""), collapse = ""),
@@ -137,15 +180,14 @@ ai_complete <- function(proj, provider, model, system, messages, max_tokens = 40
       if (!nzchar(az$endpoint %||% "")) api_error(400, "ai_endpoint", "Set the Azure OpenAI endpoint in AI settings (or AZURE_OPENAI_ENDPOINT on the server).")
       url <- paste0(az$endpoint, "/openai/deployments/", utils::URLencode(model, reserved = TRUE), "/chat/completions?api-version=", az$apiVersion %||% AZURE_API_VERSION)
       b <- ai_perform(httr2::req_body_json(httr2::req_headers(httr2::request(url), `api-key` = key, .redact = "api-key"),
-                                            list(messages = c(list(list(role = "system", content = system)), msgs), max_completion_tokens = max_tokens)), key)
-      ch <- (b$choices %||% list())[[1]] %||% list()
-      list(text = ch$message$content %||% "", input = b$usage$prompt_tokens %||% 0, output = b$usage$completion_tokens %||% 0, model = b$model %||% model,
-           stop = if (identical(ch$finish_reason, "length")) "max_tokens" else ch$finish_reason %||% "")
+                                            list(messages = c(list(list(role = "system", content = system)), with_image("azure")), max_completion_tokens = max_tokens)), key)
+      chat_out(b)
     })
   if (!nzchar(trimws(out$text))) api_error(502, "ai_empty", "The AI provider returned no text.", "Try again, raise the output-token limit, or choose another model.")
   st <- ai_state(proj)
   st$usage$input <- st$usage$input + out$input; st$usage$output <- st$usage$output + out$output; st$usage$requests <- st$usage$requests + 1
   sent <- paste0("[system]\n", system, "\n\n", paste(vapply(msgs, function(m) paste0("[", m$role, "]\n", m$content), ""), collapse = "\n\n"))
+  if (!is.null(image)) sent <- paste0(sent, sprintf("\n\n[image: %s, %.0f KB]", image$mediaType, nchar(image$data) * 3 / 4 / 1024))
   st$log <- utils::tail(c(st$log, list(list(time = now_iso(), provider = provider, model = out$model, purpose = purpose, sentChars = nchar(sent),
                                              inputTokens = out$input, outputTokens = out$output, seconds = round(as.numeric(difftime(Sys.time(), t0, units = "secs")), 1),
                                              sent = substr(sent, 1, 300000)))), 50)
@@ -161,6 +203,18 @@ ai_mock_reply <- function(system, msgs) {
   list(text = paste0("## Results\n\nAs Table 1 shows, the first reported estimate was ", n1, " (Hair et al., 2022). An unsupported value of 9.876 is included for testing.\n\n",
                      "[Author judgement needed] Explain what this means for theory."),
        input = nchar(paste(system, last)) %/% 4, output = 60, model = "mock-1", stop = "end_turn")
+}
+
+#' Offline test provider for pictures: a fixed four-construct model (one indicator is not in the sample data).
+ai_mock_image_reply <- function(msgs) {
+  txt <- paste0('```json\n{"constructs": [',
+    '{"name": "PE", "label": "Performance expectancy", "mode": "reflective", "indicators": ["PE1", "PE2", "PE3"], "x": 0.1, "y": 0.2},',
+    '{"name": "EE", "label": "Effort expectancy", "mode": "reflective", "indicators": ["EE 1", "ee2", "EE3"], "x": 0.1, "y": 0.8},',
+    '{"name": "BI", "mode": "reflective", "indicators": [], "x": 0.5, "y": 0.5},',
+    '{"name": "UB", "mode": "formative", "indicators": ["UB1", "UB2", "UB9"], "x": 0.9, "y": 0.5}],',
+    '"paths": [{"from": "PE", "to": "BI"}, {"from": "EE", "to": "BI"}, {"from": "BI", "to": "UB"}, {"from": "BI", "to": "Nowhere"}],',
+    '"notes": "Test reading."}\n```')
+  list(text = txt, input = 1500, output = 200, model = "mock-1", stop = "end_turn")
 }
 
 # ---- Fact sheet ------------------------------------------------------------------------------------
@@ -378,3 +432,115 @@ ai_test <- function(proj, b) {
 }
 
 ai_log <- function(proj) rev(ai_state(proj)$log)
+
+# ---- Model from a picture (PLS-SEM) -------------------------------------------------------------------
+# A picture of a path model (drawn in Word, PowerPoint, a paper or by hand) is read once by the chosen AI provider into
+# constructs, indicators and paths; the indicators are then matched to the dataset's column names here, in R. Only the
+# picture and the column names are sent, never data values. Nothing is drawn until the user has checked the result.
+
+AI_IMAGE_TYPES <- c("image/png", "image/jpeg", "image/webp", "image/gif")
+AI_IMAGE_MAX_BYTES <- 5 * 1024^2
+
+ai_diagram_system <- function(columns) paste0(
+  "You read pictures of structural equation (path) models, as drawn for PLS-SEM studies, and return them as JSON. ",
+  "Constructs (latent variables) are usually ovals or circles, sometimes boxes; indicators (items) are small boxes or labels attached to a construct; ",
+  "structural paths are arrows between constructs. Use the names exactly as written in the picture (an abbreviation inside the shape is the name; ",
+  "a longer full name, if also shown, is the label). List a construct's indicators only when the picture shows them; never invent them. ",
+  "A construct is formative when the arrows run from its indicators to the construct; otherwise it is reflective. ",
+  "Give each construct's centre as x and y between 0 (left/top) and 1 (right/bottom) of the picture. ",
+  "Ignore numbers on the arrows (estimates), error terms, R-squared values and legends.\n\n",
+  "Reply with JSON only, no other text, in this form:\n",
+  '{"constructs": [{"name": "PE", "label": "Performance expectancy", "mode": "reflective", "indicators": ["PE1", "PE2"], "x": 0.1, "y": 0.3}], ',
+  '"paths": [{"from": "PE", "to": "BI"}], "notes": "anything that was unclear, in one short sentence, or an empty string"}\n',
+  "If the picture is not a path model, reply {\"constructs\": [], \"paths\": [], \"notes\": \"<what the picture shows>\"}.\n\n",
+  "The dataset has these column names (indicators are usually among them): ", paste(utils::head(columns, 600), collapse = ", "))
+
+#' The JSON object in a reply (also inside a ```json block, or with text around it).
+ai_extract_json <- function(text) {
+  t <- sub("^[^{]*", "", text); t <- sub("[^}]*$", "", t)
+  out <- tryCatch(jsonlite::fromJSON(t, simplifyVector = FALSE), error = function(e) NULL)
+  if (is.null(out) || !is.list(out)) api_error(502, "ai_diagram_reply", "The AI reply could not be read as a model.", "Try again, or use a clearer picture (a screenshot rather than a photo).")
+  out
+}
+
+#' A column name for an indicator written in the picture: exact, then ignoring case, spaces, dots, dashes and underscores.
+ai_match_column <- function(text, columns) {
+  if (text %in% columns) return(text)
+  key <- function(x) tolower(gsub("[[:space:]._-]+", "", x))
+  hit <- columns[key(columns) == key(text)]
+  if (length(hit)) hit[1] else NULL
+}
+
+#' Columns that look like a construct's items when the picture shows none: the construct name followed by a number
+#' (PE1, PE_2, pe 3), not already used by another construct.
+ai_prefix_columns <- function(name, columns, used) {
+  pat <- paste0("^", gsub("([][{}()+*^$|\\\\?.])", "\\\\\\1", name), "[[:space:]._-]*[0-9]+$")
+  setdiff(columns[grepl(pat, columns, ignore.case = TRUE)], used)
+}
+
+#' Normalises the provider's reading and matches it to the dataset. Returns constructs with their indicators
+#' ({text, column, suggestions}), whether indicators were suggested from the data, and the valid paths.
+ai_diagram_normalise <- function(raw, columns) {
+  num01 <- function(v) { v <- suppressWarnings(as.numeric(v %||% NA))[1]; if (is.na(v)) NA_real_ else max(0, min(1, v)) }
+  cons <- list(); seen <- character(0)
+  for (c in raw$constructs %||% list()) {
+    if (!is.list(c)) next
+    name <- trimws(as.character(c$name %||% "")[1])
+    if (!nzchar(name) || tolower(name) %in% tolower(seen)) next
+    seen <- c(seen, name)
+    cons[[length(cons) + 1]] <- list(name = substr(name, 1, 60), label = substr(trimws(as.character(c$label %||% "")[1]), 1, 120),
+      mode = if (identical(tolower(as.character(c$mode %||% "")[1]), "formative")) "formative" else "reflective",
+      written = unique(trimws(vapply(c$indicators %||% list(), function(i) as.character(i %||% "")[1], ""))), x = num01(c$x), y = num01(c$y))
+  }
+  used <- character(0)
+  # Indicators shown in the picture first (exact matches before loose ones), then prefix suggestions for the rest.
+  for (k in seq_along(cons)) {
+    w <- Filter(nzchar, cons[[k]]$written)
+    cons[[k]]$indicators <- lapply(w, function(t) {
+      col <- ai_match_column(t, setdiff(columns, used))
+      if (!is.null(col)) used <<- c(used, col)
+      list(text = t, column = col)
+    })
+  }
+  for (k in seq_along(cons)) {
+    cons[[k]]$indicators <- lapply(cons[[k]]$indicators, function(i) {
+      if (is.null(i$column)) i$suggestions <- as.list(utils::head(c(ai_prefix_columns(cons[[k]]$name, columns, used), ai_prefix_columns(sub("[^A-Za-z]+$", "", i$text), columns, used)), 6))
+      i
+    })
+    cons[[k]]$suggested <- FALSE
+    if (!length(cons[[k]]$indicators)) {
+      sug <- ai_prefix_columns(cons[[k]]$name, columns, used)
+      used <- c(used, sug)
+      cons[[k]]$indicators <- lapply(sug, function(col) list(text = col, column = col))
+      cons[[k]]$suggested <- length(sug) > 0
+    }
+    cons[[k]]$written <- NULL
+  }
+  names_ <- vapply(cons, `[[`, "", "name")
+  find <- function(n) { i <- match(tolower(trimws(as.character(n %||% "")[1])), tolower(names_)); if (is.na(i)) NULL else names_[i] }
+  paths <- list(); skipped <- 0L; keys <- character(0)
+  for (p in raw$paths %||% list()) {
+    f <- find(p$from); t <- find(p$to)
+    if (is.null(f) || is.null(t) || identical(f, t)) { skipped <- skipped + 1L; next }
+    key <- paste(f, t, sep = "\r")
+    if (key %in% keys) next
+    keys <- c(keys, key); paths[[length(paths) + 1]] <- list(from = f, to = t)
+  }
+  list(constructs = cons, paths = paths, skippedPaths = skipped, notes = substr(trimws(as.character(raw$notes %||% "")[1]), 1, 400))
+}
+
+#' Body: {image: base64, mediaType, columns, provider, model, consent}
+ai_model_from_image <- function(proj, b) {
+  if (!isTRUE(b$consent)) api_error(400, "ai_consent", "Confirm that the picture may be sent to the AI provider first.")
+  mt <- as.character(b$mediaType %||% "")[1]
+  if (!mt %in% AI_IMAGE_TYPES) api_error(400, "ai_image", "Use a PNG, JPEG, WebP or GIF picture.")
+  data <- gsub("[[:space:]]", "", sub("^data:[^,]*,", "", as.character(b$image %||% "")[1]))
+  if (!nzchar(data) || !grepl("^[A-Za-z0-9+/]+=*$", data)) api_error(400, "ai_image", "The picture could not be read.")
+  if (nchar(data) * 3 / 4 > AI_IMAGE_MAX_BYTES) api_error(413, "ai_image", "The picture is larger than 5 MB.", "Crop it to the model, or take a smaller screenshot.")
+  columns <- unique(as.character(unlist(b$columns %||% list())))
+  r <- ai_complete(proj, b$provider, b$model, ai_diagram_system(columns),
+                   list(list(role = "user", content = "Read the path model in this picture and reply with the JSON.")), b$maxTokens %||% 4000, "model from a picture",
+                   image = list(mediaType = mt, data = data))
+  out <- ai_diagram_normalise(ai_extract_json(r$text), columns)
+  c(out, list(usage = r$usage, model = r$model, provider = r$provider))
+}

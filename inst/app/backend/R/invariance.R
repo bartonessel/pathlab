@@ -8,7 +8,7 @@ normalize_invariance <- function(raw) {
   raw <- raw %||% list()
   g <- as.character(raw[["groupVariable"]] %||% "")[1]
   if (!nzchar(g)) api_error(400, "inv_group", "Choose the grouping variable.")
-  list(groupVariable = g, groups = unique(as_chr_vec(raw[["groups"]])), strict = isTRUE(raw[["strict"]]))
+  list(groupVariable = g, groups = unique(as_chr_vec(raw[["groups"]])), strict = isTRUE(raw[["strict"]]), structural = isTRUE(raw[["structural"]]))
 }
 
 run_invariance <- function(df, model, cb, inv, missing_code = NULL) {
@@ -73,6 +73,8 @@ run_invariance <- function(df, model, cb, inv, missing_code = NULL) {
   }
   highest <- "configural"
   for (r in rows[-1]) { if (isTRUE(r$supported)) highest <- r$model else break }
+  structural <- if (isTRUE(inv$structural) && length(model$paths)) tryCatch(inv_structural(model, d, cb, steps, highest, mx), error = function(e)
+    list(error = paste("The structural comparison could not be estimated:", sanitize_message(conditionMessage(e))))) else NULL
   list(
     options = inv,
     groupVariable = g,
@@ -82,6 +84,7 @@ run_invariance <- function(df, model, cb, inv, missing_code = NULL) {
     scaled = robust,
     models = rows,
     highestSupported = highest,
+    structural = structural,
     warnings = as.list(unique(warn)),
     rCode = invariance_code(mx, cb, inds, g, inv, steps, missing_code),
     environment = list(lavaan = as.character(utils::packageVersion("lavaan"))),
@@ -125,6 +128,17 @@ inv_body_html <- function(res) {
                                            if (is.null(m$deltaRmsea)) "&ndash;" else flag(fmt(m$deltaRmsea), m$deltaRmsea >= 0.015)))
   a(html_table(c("Model", "&chi;&sup2;", "df", "CFI", "RMSEA", "SRMR", "&Delta;&chi;&sup2; (&Delta;df)", "p", "&Delta;CFI", "&Delta;RMSEA"), rows,
                if (isTRUE(res$scaled)) "Invariance tests (scaled &chi;&sup2; and robust indices)" else "Invariance tests", num_cols = 2:10))
+  st <- res$structural
+  if (!is.null(st)) {
+    a("<h3>Equality of the structural paths across groups</h3>")
+    if (!is.null(st$error)) a("<div class=\"warn\">", esc(st$error), "</div>") else {
+      a(sprintf("<p>With %s invariance imposed, constraining all structural paths to be equal across groups: &Delta;&chi;&sup2;(%s) = %s, p = %s.</p>", esc(st$measurement), fmt(st$dfDiff, 0), fmt(st$chisqDiff, 2), fmt_p(st$p)))
+      if (length(st$paths)) a(html_table(c("Path", "Score test &chi;&sup2;", "df", "p"), lapply(st$paths, function(x) c(paste0(esc(x$rhs), " &rarr; ", esc(x$lhs)), fmt(x$chisq, 2), fmt(x$df, 0), fmt_p(x$p))),
+                                         "Equality of each path across groups (score tests; a small p means the path differs between groups)", num_cols = 2:4))
+      if (length(st$byGroup)) a(html_table(c("Group", "Path", "Estimate", "Std.", "SE", "p"), lapply(st$byGroup, function(x) c(esc(x$group), paste0(esc(x$rhs), " &rarr; ", esc(x$lhs)), fmt(x$est), fmt(x$std), fmt(x$se), fmt_p(x$p))),
+                                           "Structural paths in each group (paths free)", num_cols = 3:6))
+    }
+  }
   a("<h3>R code</h3><pre><code>", esc(res$rCode %||% ""), "</code></pre>")
   paste(S, collapse = "\n")
 }
@@ -136,7 +150,10 @@ inv_sheets <- function(res, project_name) {
   list(Info = data.frame(Item = c("Project", "Completed (UTC)", "PathLab SEM version", "lavaan", "Grouping variable", "Estimator", "Highest level supported"),
                          Value = c(project_name, res$completedAt, PATHLAB_VERSION, res$environment$lavaan, res$groupVariable, res$estimator, res$highestSupported), stringsAsFactors = FALSE),
        Groups = data.frame(Group = vapply(res$groups, `[[`, "", "group"), n = vapply(res$groups, function(x) x$n, 0L)),
-       Models = m)
+       Models = m,
+       StructuralEquality = if (is.null(res$structural)) data.frame(Note = "Not requested") else if (!is.null(res$structural$error)) data.frame(Note = res$structural$error) else
+         rbind(data.frame(Path = "All paths", ChiSquare = num_of(res$structural$chisqDiff), df = num_of(res$structural$dfDiff), p = num_of(res$structural$p), stringsAsFactors = FALSE),
+               if (length(res$structural$paths)) do.call(rbind, lapply(res$structural$paths, function(x) data.frame(Path = paste(x$rhs, "->", x$lhs), ChiSquare = num_of(x$chisq), df = num_of(x$df), p = num_of(x$p), stringsAsFactors = FALSE)))))
 }
 
 inv_pub_spec <- function(res, opts) {
@@ -151,4 +168,35 @@ inv_pub_spec <- function(res, opts) {
                                      if (isTRUE(res$scaled)) " using scaled χ² differences and robust fit indices" else "")))
   t$number <- 1
   list(t)
+}
+
+#' Equality of the structural paths across groups (after measurement invariance): the structural model with the
+#' measurement constraints of the highest supported step (at least metric), with free paths and with equal paths,
+#' compared by a chi-square difference test; each path's equality constraint is tested with a score test
+#' (lavaan::lavTestScore, univariate), as in multigroup SEM practice (Byrne, 2012).
+inv_structural <- function(model, d, cb, steps, highest, mx) {
+  sx <- cb_syntax(c(model[setdiff(names(model), "moderations")], list(moderations = list())), structural = TRUE)
+  syn <- strsplit(sx$syntax, "\n", fixed = TRUE)[[1]]
+  syn <- gsub("\\bp[0-9]+\\*", "", syn[!grepl(":=", syn, fixed = TRUE)])
+  syn <- paste(syn, collapse = "\n")
+  meas <- if (highest == "configural") steps$metric else steps[[highest]]
+  args <- list(model = syn, data = d, group = ".group", estimator = cb$estimator, missing = if (cb$missing == "fiml") "fiml" else "listwise", group.equal = meas)
+  if (cb$ordinal) { args$ordered <- TRUE; args$parameterization <- "theta" }
+  f0 <- suppressWarnings(do.call(lavaan::sem, args))
+  f1 <- suppressWarnings(do.call(lavaan::sem, modifyList(args, list(group.equal = c(meas, "regressions")))))
+  lrt <- suppressWarnings(lavaan::lavTestLRT(f0, f1))
+  nm <- function(x) unname(ifelse(x %in% names(sx$byLavaan), sx$byLavaan[x], x))
+  pt <- lavaan::parTable(f1)
+  sc <- tryCatch(suppressWarnings(lavaan::lavTestScore(f1, univariate = TRUE, cumulative = FALSE)$uni), error = function(e) NULL)
+  per <- if (is.null(sc)) list() else lapply(seq_len(nrow(sc)), function(i) {
+    j <- which(pt$plabel == sc$lhs[i])[1]
+    if (is.na(j) || pt$op[j] != "~") return(NULL)
+    list(lhs = nm(pt$lhs[j]), rhs = nm(pt$rhs[j]), chisq = unname(sc$X2[i]), df = unname(sc$df[i]), p = unname(sc$p.value[i]))
+  })
+  per <- Filter(Negate(is.null), per)
+  pe <- lavaan::parameterEstimates(f0, standardized = TRUE); pe <- pe[pe$op == "~", , drop = FALSE]
+  labs <- lavaan::lavInspect(f0, "group.label")
+  list(measurement = if (highest == "configural") "metric" else highest, chisqDiff = unname(lrt[2, "Chisq diff"]), dfDiff = unname(lrt[2, "Df diff"]), p = unname(lrt[2, "Pr(>Chisq)"]),
+       paths = per,
+       byGroup = lapply(seq_len(nrow(pe)), function(i) list(group = labs[pe$group[i]], lhs = nm(pe$lhs[i]), rhs = nm(pe$rhs[i]), est = pe$est[i], std = pe$std.all[i], se = pe$se[i], p = pe$pvalue[i])))
 }

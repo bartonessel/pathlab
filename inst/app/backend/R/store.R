@@ -89,6 +89,7 @@ dataset_payload <- function(ds, include_preview = TRUE) {
     derived = unname(lapply(ds$derived %||% list(), derived_meta)),
     edits = edits_payload(ds)
   )
+  if (length(ds$valueLabels)) out$valueLabels <- ds$valueLabels
   if (include_preview) out$preview <- list(columns = arr(names(ds$data)), rows = dataset_preview(ds$data))
   out
 }
@@ -114,7 +115,7 @@ store_dataset <- function(proj, raw, filename, sheet = NULL, dataset_id = NULL) 
   )
   issues <- c(parsed$notes %||% list(), validate_dataset(df, profile, parsed$reader))
   ds <- list(id = dataset_id, path = path, data = df, profile = profile, issues = issues,
-             meta = meta, sheets = parsed$sheets, declared = parsed$declared)
+             meta = meta, sheets = parsed$sheets, declared = parsed$declared, valueLabels = parsed$valueLabels)
   proj$datasets[[dataset_id]] <- ds
   ds
 }

@@ -237,7 +237,17 @@ run_analysis <- function(df, model, settings, dataset_meta, progress = function(
   out <- extract_estimation(m, s$value, model)
   fit <- if (has_hoc(model)) list(available = FALSE, reason = "Model fit (SRMR, d_ULS, d_G) is not computed for models with higher-order constructs in PathLab yet.") else tryCatch(model_fit(m, model, unclass(s$value$reliability)),
                   error = function(e) list(available = FALSE, reason = paste("Model fit could not be computed:", sanitize_message(conditionMessage(e)))))
+  fit_full <- fit
+  attr(fit, "sigma") <- NULL; attr(fit, "items") <- NULL
   out$measurement$fit <- fit
+  ex <- settings$extras %||% list()
+  if (isTRUE(ex$fitTest) && isTRUE(fit$available)) {
+    progress("fit_test", sprintf("Bootstrap test of model fit (%d samples)", ex$fitBoot), 0.16, 2 * ex$fitBoot * est_seconds * 1.5)
+    out$measurement$fitTest <- tryCatch(fit_boot_test(m, model, unclass(s$value$reliability), ex$fitBoot, ex$seed),
+                                        error = function(e) list(available = FALSE, reason = sanitize_message(conditionMessage(e))))
+  }
+  if (isTRUE(ex$cta)) out$measurement$cta <- tryCatch(cta_pls(m, ex$extrasBoot, ex$seed), error = function(e) list(error = sanitize_message(conditionMessage(e))))
+  if (isTRUE(ex$endogeneity)) out$structural$endogeneity <- tryCatch(copula_test(m, ex$extrasBoot, ex$seed), error = function(e) list(error = sanitize_message(conditionMessage(e))))
   if (isTRUE(fit$seminrPathsDiffer)) diagnostics$warnings <- c(diagnostics$warnings, sprintf(
     "SEMinR %s applies the PLSc correction (rho_A) to Mode A composite construct(s) too (%s) when the model also has reflective constructs, so its path coefficients and R² differ from standard PLSc (Dijkstra & Henseler, 2015) as used by SmartPLS and cSEM. Model fit is computed with the standard definition.",
     seminr_version(), paste(unlist(fit$affectedComposites), collapse = ", ")))
@@ -288,6 +298,10 @@ run_analysis <- function(df, model, settings, dataset_meta, progress = function(
       specificIndirectEffects = specific,
       messages = arr(boot_msgs)
     )
+    if (isTRUE(b$bca)) {
+      progress("bca", "Computing BCa intervals (jackknife)", 0.9, nrow(m$data) * est_seconds)
+      boot <- tryCatch(pls_bca(m, bm, boot, b$confidenceLevel), error = function(e) { diagnostics$warnings <<- c(diagnostics$warnings, paste("BCa intervals could not be computed:", sanitize_message(conditionMessage(e)))); boot })
+    }
     if (successful < b$nboot) {
       diagnostics$warnings <- c(diagnostics$warnings,
                                 sprintf("%d of %d bootstrap samples failed (often due to PLSc in a resample) and were excluded by SEMinR. Inference is based on %d samples.",
@@ -301,6 +315,8 @@ run_analysis <- function(df, model, settings, dataset_meta, progress = function(
     progress("predicting", sprintf("Running PLSpredict (%d folds x %d repetition(s))", p$noFolds, p$reps), 0.93)
     if (!is.null(p$seed)) set.seed(p$seed)
     hoc_pred <- has_hoc(model)
+    # The case order predict_pls() draws next, so its folds are known (Q²predict and CVPAT need them).
+    ord <- if (hoc_pred) NULL else predict_order(nrow(m$data))
     fail <- function(e) stop(analysis_failure("predict", "PLSpredict failed, so no prediction results are reported.",
                                               "Try fewer folds, or run the analysis without PLSpredict.", sanitize_message(conditionMessage(e))))
     # Higher-order models: SEMinR's procedure with the two-stage approach inside every fold (predict_pls_two_stage);
@@ -315,7 +331,14 @@ run_analysis <- function(df, model, settings, dataset_meta, progress = function(
       plsRMSE = num_or_null(po["RMSE", it]), plsMAE = num_or_null(po["MAE", it]),
       lmRMSE = num_or_null(lo["RMSE", it]), lmMAE = num_or_null(lo["MAE", it]),
       diffRMSE = num_or_null(po["RMSE", it] - lo["RMSE", it]), diffMAE = num_or_null(po["MAE", it] - lo["MAE", it])))
-    pred <- list(technique = p$technique, noFolds = p$noFolds, reps = p$reps, seed = p$seed, items = items,
+    # Q²predict and CVPAT from the same out-of-sample predictions and folds.
+    ic <- setNames(m$mmMatrix[, "construct"], m$mmMatrix[, "measurement"]); if (!is.null(m$first_stage_model)) ic <- c(ic, setNames(m$first_stage_model$mmMatrix[, "construct"], m$first_stage_model$mmMatrix[, "measurement"]))
+    extra <- tryCatch(if (hoc_pred) { r <- pr$value$residuals; predict_q2_cvpat(r$actual, r$pls, r$lm, r$folds, ic) } else {
+      it <- pr$value$items; cols <- colnames(it$PLS_out_of_sample_residuals); n <- nrow(m$data)
+      folds <- cut(seq_len(n), breaks = p$noFolds, labels = FALSE)[match(seq_len(n), ord)]
+      predict_q2_cvpat(it$item_actuals[, cols, drop = FALSE], it$PLS_out_of_sample_residuals, it$lm_out_of_sample_residuals[, cols, drop = FALSE], folds, ic)
+    }, error = function(e) NULL)
+    pred <- list(technique = p$technique, noFolds = p$noFolds, reps = p$reps, seed = p$seed, items = items, q2 = extra$q2, cvpat = extra$cvpat,
                  method = if (hoc_pred) "two_stage_folds" else "seminr",
                  notPredicted = if (hoc_pred) arr(ps$notPredicted) else NULL)
   }
@@ -324,6 +347,13 @@ run_analysis <- function(df, model, settings, dataset_meta, progress = function(
   if (isTRUE(settings$ipma$enabled)) {
     progress("ipma", "Computing the importance-performance map", 0.94)
     ipma <- run_ipma(m, model, settings$ipma)
+    if (isTRUE(settings$ipma$bootstrap)) {
+      progress("ipma_boot", sprintf("Bootstrapping the IPMA importance (%d samples)", settings$ipma$bootN), 0.945, settings$ipma$bootN * est_seconds * 1.3)
+      ipma <- tryCatch(ipma_bootstrap(m, model, settings$ipma, ipma, settings$ipma$bootN, settings$bootstrap$seed %||% 2026L, settings$bootstrap$confidenceLevel),
+                       error = function(e) { diagnostics$warnings <<- c(diagnostics$warnings, paste("IPMA bootstrap failed:", sanitize_message(conditionMessage(e)))); ipma })
+    }
+    if (length(settings$ipma$targets)) ipma$others <- ipma_more_targets(m, model, settings$ipma)
+    ipma_bounds <- ipma$bounds; ipma$bounds <- NULL
     if (length(ipma$negativeWeights)) diagnostics$warnings <- c(diagnostics$warnings,
       sprintf("IPMA: %d indicator(s) have negative rescaled weights (%s). IPMA assumes all outer weights are positive; interpret with caution.",
               length(ipma$negativeWeights), paste(unlist(ipma$negativeWeights), collapse = ", ")))
@@ -340,9 +370,16 @@ run_analysis <- function(df, model, settings, dataset_meta, progress = function(
   }
   mga <- NULL
   if (isTRUE(settings$mga$enabled)) {
-    progress("mga", sprintf("Running PLS-MGA (%d bootstrap samples per group)", settings$mga$nboot), 0.96,
-             2 * (3 * settings$bootstrap$cores + settings$mga$nboot * est_seconds * 1.15 / settings$bootstrap$cores))
+    progress("mga", sprintf("Running PLS-MGA (%d bootstrap samples per group)%s", settings$mga$nboot, if (isTRUE(settings$mga$micom)) sprintf(" and MICOM (%d permutations)", settings$mga$micomPerm) else ""), 0.96,
+             2 * (3 * settings$bootstrap$cores + settings$mga$nboot * est_seconds * 1.15 / settings$bootstrap$cores) +
+               if (isTRUE(settings$mga$micom)) 2 * settings$mga$micomPerm * est_seconds else 0)
     mga <- run_mga(df, prep, model, settings, settings$bootstrap$cores)
+    # Group-specific IPMA (same rescaling bounds as the full sample), shown in the IPMA tab.
+    if (!is.null(ipma) && isTRUE(settings$ipma$byGroup) && !is.null(mga$groupModels)) {
+      ipma$groups <- lapply(mga$groupModels, function(gm) tryCatch({ r <- run_ipma(gm$model, model, modifyList(settings$ipma, list(cipma = FALSE)), bounds = ipma_bounds)
+        list(group = gm$label, n = nrow(gm$model$data), targetPerformance = r$targetPerformance, constructs = r$constructs) }, error = function(e) list(group = gm$label, error = sanitize_message(conditionMessage(e)))))
+    }
+    mga$groupModels <- NULL
     if (mga$nbootUsed < mga$nboot) diagnostics$warnings <- c(diagnostics$warnings,
       sprintf("PLS-MGA used %d of %d bootstrap samples per group after SEMinR removed inadmissible runs.", mga$nbootUsed, mga$nboot))
   }
@@ -372,6 +409,7 @@ run_analysis <- function(df, model, settings, dataset_meta, progress = function(
     nca = nca,
     mga = mga,
     cmb = cmb,
+    moderation = tryCatch(moderation_effects(m, if (!is.null(boot)) bm else NULL, settings$bootstrap$confidenceLevel), error = function(e) NULL),
     diagnostics = list(messages = arr(unique(diagnostics$messages)), warnings = arr(unique(diagnostics$warnings))),
     .derived = list(nInput = prep$nInput, rows = prep$rows, tables = list(scores = as.data.frame(m$construct_scores),
                                                                    # Min-max normalised to 0-1 for fsQCA (Sukhov et al., 2023).

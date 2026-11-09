@@ -46,6 +46,14 @@ run_glmx <- function(d, o) {
   dd <- model_frame(d, opt(o, "dep"), covs, facs)
   if (!is.null(w)) { dd$.w <- as.numeric(d[[w]])[as.integer(rownames(dd))]; dd <- dd[!is.na(dd$.w) & dd$.w > 0, , drop = FALSE] }
   if (fam %in% c("gamma", "invgauss") && any(dd$y <= 0, na.rm = TRUE)) api_error(422, "glm_positive", sprintf("%s model needs an outcome with values above 0; '%s' has %d value(s) of 0 or below.", if (fam == "gamma") "A Gamma" else "An inverse Gaussian", o$dep, sum(dd$y <= 0, na.rm = TRUE)), "Choose another family (e.g. negative binomial or quasi-Poisson for counts) or a positive outcome.")
+  # Count models need counts: whole numbers of 0 or more (glm.nb otherwise warns "non-integer x" once per case).
+  if (fam %in% c("negbin", "quasipoisson")) {
+    yv <- dd$y[!is.na(dd$y)]
+    if (!is.numeric(yv) || any(yv < 0) || any(abs(yv - round(yv)) > 1e-8))
+      api_error(422, "glm_counts", sprintf("A %s model needs counts (whole numbers of 0 or more), but '%s' has %s.", if (fam == "negbin") "negative binomial" else "quasi-Poisson", o$dep,
+                                           if (!is.numeric(yv)) "text values" else if (any(yv < 0)) "negative values" else "decimal values"),
+                "For a continuous outcome choose the Normal family (or Gamma / inverse Gaussian for positive, skewed values).")
+  }
   if (fam == "probit") { yy <- dd$y; lv <- sort(unique(yy)); if (length(lv) != 2) api_error(422, "glm_binary", "A probit model needs an outcome with exactly two values."); dd$y <- as.integer(yy == lv[2]) }
   form <- stats::as.formula(paste("y ~", rhs_of(covs, facs)))
   wt <- if (!is.null(w)) dd$.w else NULL
@@ -576,7 +584,783 @@ stats_more_code <- function(s, lines, q) {
     lgc = , lca = , lta = , gmm = latent_more_code(s, q),
     kmeans = c(sprintf("z <- scale(na.omit(data[, c(%s)]))", paste(q(unlist(o$vars)), collapse = ", ")), sprintf("set.seed(%s); %s", o$seed %||% 2026, if (identical(o$method, "pam")) sprintf("cluster::pam(z, %s)", o$k %||% 3) else sprintf("kmeans(z, %s, nstart = 25)", o$k %||% 3))),
     hclust = c(sprintf("z <- scale(na.omit(data[, c(%s)]))", paste(q(unlist(o$vars)), collapse = ", ")), sprintf("h <- hclust(dist(z), method = %s)", q(o$method %||% "ward.D2")), sprintf("cutree(h, k = %s); plot(h)", o$k %||% 3)),
+    svy = c("library(survey)", sprintf("des <- svydesign(ids = %s, strata = %s, weights = ~`%s`, data = data, nest = TRUE)", if (is.null(o$cluster)) "~1" else sprintf("~`%s`", o$cluster), if (is.null(o$strata)) "NULL" else sprintf("~`%s`", o$strata), o$weights),
+            sprintf("svymean(~`%s`, des, deff = TRUE, na.rm = TRUE)", o$dep),
+            if (length(c(unlist(o$covs), unlist(o$factors)))) sprintf("summary(svyglm(`%s` ~ %s, design = des%s))", o$dep, v(c(o$covs, o$factors)), if (identical(o$family, "binomial")) ", family = quasibinomial()" else "")),
+    did = c("library(sandwich); library(lmtest)", sprintf("fit <- lm(`%s` ~ `%s` * `%s`%s, data = data)   # treatment (0/1) x period (0/1)", o$dep, o$treat, o$post, if (length(c(unlist(o$covs), unlist(o$factors)))) paste(" +", v(c(o$covs, o$factors))) else ""),
+            sprintf("coeftest(fit, vcov. = %s)   # the interaction is the DiD effect", if (is.null(o$cluster)) "vcovHC(fit, type = \"HC1\")" else sprintf("vcovCL(fit, cluster = ~`%s`, type = \"HC1\")", o$cluster))),
+    psm = c("library(MatchIt); library(sandwich); library(lmtest)", sprintf("set.seed(%s)", o$seed %||% 2026),
+            sprintf("m <- matchit(`%s` ~ %s, data = data, method = \"%s\", distance = \"glm\", estimand = \"ATT\"%s)", o$treat, v(c(o$covs, o$factors)), o$method %||% "nearest",
+                    if ((o$method %||% "nearest") == "nearest") sprintf(", ratio = %s, replace = %s%s", o$ratio %||% 1, if (isTRUE(o$replace)) "TRUE" else "FALSE", if ((o$caliper %||% 0) > 0) sprintf(", caliper = %s", o$caliper) else "") else ""),
+            "summary(m)   # balance before and after matching", "md <- match.data(m)",
+            if (!is.null(o$dep)) c(sprintf("fit <- lm(`%s` ~ `%s`, data = md, weights = weights)", o$dep, o$treat), "coeftest(fit, vcov. = vcovCL, cluster = ~subclass)   # ATT")),
+    ipw = c("library(sandwich); library(lmtest)", sprintf("ps <- fitted(glm(`%s` ~ %s, data = data, family = binomial()))", o$treat, v(c(o$covs, o$factors))),
+            sprintf("t <- data$`%s`", o$treat), switch(o$estimand %||% "ATE", ATT = "w <- ifelse(t == 1, 1, ps / (1 - ps))",
+              if (isFALSE(o$stabilized)) "w <- ifelse(t == 1, 1 / ps, 1 / (1 - ps))" else "w <- ifelse(t == 1, mean(t) / ps, (1 - mean(t)) / (1 - ps))   # stabilised"),
+            sprintf("fit <- lm(`%s` ~ t, data = data, weights = w)", o$dep), "coeftest(fit, vcov. = vcovHC(fit, type = \"HC0\"))"),
+    nca = c("library(NCA)", sprintf("d <- na.omit(data[, c(%s)])", paste(q(c(unlist(o$conditions), o$outcome)), collapse = ", ")),
+            sprintf("set.seed(%s); model <- nca_analysis(d, x = c(%s), y = %s, ceilings = c(%s), test.rep = %s, steps = %s%s%s)", o$seed %||% 2026, paste(q(unlist(o$conditions)), collapse = ", "), q(o$outcome),
+                    paste(q(unlist(o$ceilings %||% list("ce_fdh", "cr_fdh"))), collapse = ", "), o$testRep %||% 1000, o$steps %||% 10,
+                    if (!is.null(o$corner) && o$corner != "1") sprintf(", corner = %s", o$corner) else "",
+                    if (!is.null(o$scopeMin) && !is.null(o$scopeMax)) sprintf(", scope = list(c(%s, %s, %s, %s))", o$scopeMin, o$scopeMax, o$scopeMin, o$scopeMax) else ""),
+            "nca_output(model, summaries = TRUE, bottlenecks = TRUE, plots = TRUE)",
+            if (isTRUE(o$outliers)) sprintf("for (x in c(%s)) print(nca_outliers(d, x, %s))", paste(q(unlist(o$conditions)), collapse = ", "), q(o$outcome)),
+            if (isTRUE(o$power)) sprintf("nca_power(n = nrow(d), effect = %s, rep = %s)", o$powerEffect %||% 0.1, o$powerRep %||% 100)),
+    banovaRM = c("library(BayesFactor)", sprintf("w <- na.omit(data[, c(%s)]); n <- nrow(w)", paste(q(c(unlist(o$measures), unlist(o$bs))), collapse = ", ")),
+                 sprintf("long <- data.frame(id = factor(rep(1:n, %d)), cond = factor(rep(c(%s), each = n)), value = unlist(w[, c(%s)]))", length(o$measures), paste(q(unlist(o$measures)), collapse = ", "), paste(q(unlist(o$measures)), collapse = ", ")),
+                 if (length(o$bs)) sprintf("long[[%s]] <- factor(rep(w[[%s]], %d))", q(unlist(o$bs)), q(unlist(o$bs)), length(o$measures)) else NULL,
+                 sprintf("set.seed(%s); anovaBF(value ~ %s + id, data = long, whichRandom = \"id\", rscaleFixed = %s)", o$seed %||% 2026,
+                         paste(c("cond", sprintf("`%s`", unlist(o$bs))), collapse = " * "), q(o$rscale %||% "medium"))),
+    kappa = {
+      r <- paste(q(unlist(o$raters)), collapse = ", ")
+      c("library(irr)", sprintf("ratings <- na.omit(data[, c(%s)])", r),
+        if (length(o$raters) == 2) c("kappa2(ratings)   # Cohen's kappa", if (!identical(o$weights %||% "none", "none")) sprintf("kappa2(ratings, weight = %s)   # weighted kappa", q(if (identical(o$weights, "linear")) "equal" else "squared")))
+        else c("kappam.fleiss(ratings, detail = TRUE)   # Fleiss' kappa", if (isTRUE(o$light) || isTRUE(o$pairwise)) "kappam.light(ratings)   # Light's kappa"),
+        if (isTRUE(o$kripp)) sprintf("kripp.alpha(t(sapply(data[, c(%s)], function(x) as.numeric(factor(x)))), method = %s)", r, q(o$krippLevel %||% "nominal")))
+    },
+    icc = {
+      m <- o$model %||% "random"; t <- if (identical(m, "oneway")) "agreement" else o$type %||% "agreement"
+      c("library(irr)", sprintf("ratings <- na.omit(data[, c(%s)])", paste(q(unlist(o$raters)), collapse = ", ")),
+        sprintf("icc(ratings, model = %s, type = %s, unit = \"single\")", q(if (identical(m, "oneway")) "oneway" else "twoway"), q(t)),
+        sprintf("icc(ratings, model = %s, type = %s, unit = \"average\")", q(if (identical(m, "oneway")) "oneway" else "twoway"), q(t)),
+        if (isTRUE(o$allForms)) "psych::ICC(ratings)   # all six Shrout & Fleiss forms")
+    },
     lda = c("library(MASS)", sprintf("fit <- lda(factor(`%s`) ~ %s, data = data, CV = %s)", unlist(o$group)[1], v(o$vars), if (isTRUE(o$cv %||% TRUE)) "TRUE" else "FALSE"), "table(data[[1]], fit$class)"),
     character(0))
   paste(c(lines, body), collapse = "\n")
 }
+
+# ---- Agreement: Cohen's / Fleiss' kappa, Krippendorff's alpha and intraclass correlations (irr) ----------------------
+# Cohen's kappa with its large-sample standard errors (Fleiss, Cohen & Everitt, 1969) is computed here so the categories
+# keep their order (irr::kappa2 sorts numeric codes as text, which misorders weighted kappa for 10 or more categories);
+# kappa and z equal irr::kappa2, and the standard errors and confidence intervals equal vcd::Kappa (weighted and unweighted).
+kappa_label <- function(k) if (is.na(k)) "" else if (k < 0) "Poor" else if (k <= 0.20) "Slight" else if (k <= 0.40) "Fair" else if (k <= 0.60) "Moderate" else if (k <= 0.80) "Substantial" else "Almost perfect"
+icc_label <- function(x) if (is.na(x)) "" else if (x < 0.50) "Poor" else if (x < 0.75) "Moderate" else if (x < 0.90) "Good" else "Excellent"
+KAPPA_NOTE <- "Agreement: Landis & Koch (1977): below 0 poor, 0–.20 slight, .21–.40 fair, .41–.60 moderate, .61–.80 substantial, .81–1 almost perfect."
+
+#' The categories used by the raters, in order: numeric codes sorted as numbers, otherwise the level order.
+agree_levels <- function(cols) {
+  lv <- unique(unlist(lapply(cols, function(x) if (is.factor(x)) levels(droplevels(x)) else as.character(sort(unique(x[!is.na(x)]))))))
+  num <- suppressWarnings(as.numeric(lv))
+  if (!anyNA(num)) lv[order(num)] else lv
+}
+
+cohen_kappa <- function(a, b, lev, weight = "none", ci = 95) {
+  tab <- table(factor(as.character(a), levels = lev), factor(as.character(b), levels = lev))
+  n <- sum(tab); k <- length(lev); p <- tab / n; pr <- rowSums(p); pc <- colSums(p)
+  d <- abs(outer(seq_len(k), seq_len(k), "-")) / max(1, k - 1)
+  W <- switch(weight, linear = 1 - d, quadratic = 1 - d^2, diag(k))
+  po <- sum(W * p); pe <- sum(W * outer(pr, pc)); kap <- (po - pe) / (1 - pe)
+  wi <- as.vector(W %*% pc); wj <- as.vector(t(W) %*% pr)
+  v1 <- (sum(p * (W - outer(wi, wj, "+") * (1 - kap))^2) - (kap - pe * (1 - kap))^2) / (n * (1 - pe)^2)
+  v0 <- (sum(outer(pr, pc) * (W - outer(wi, wj, "+"))^2) - pe^2) / (n * (1 - pe)^2)
+  se <- sqrt(max(v1, 0)); se0 <- sqrt(max(v0, 0)); z <- kap / se0; crit <- stats::qnorm(1 - (1 - ci / 100) / 2)
+  list(kappa = kap, se = se, lower = max(-1, kap - crit * se), upper = min(1, kap + crit * se), z = z, p = 2 * stats::pnorm(-abs(z)), po = po, pe = pe, n = n, tab = tab)
+}
+
+run_kappa <- function(d, o) {
+  raters <- opt(o, "raters", character(0))
+  if (length(raters) < 2) api_error(422, "kappa_raters", "Add at least two raters (one column per rater, one row per rated case).")
+  ci <- num_opt(o, "ciWidth", 95, 50, 99.9); wt <- opt(o, "weights", "none"); if (!wt %in% c("none", "linear", "quadratic")) wt <- "none"
+  all <- d[, raters, drop = FALSE]
+  cc <- all[stats::complete.cases(all), , drop = FALSE]; n <- nrow(cc)
+  if (n < 2) api_error(422, "kappa_cases", "Fewer than two cases were rated by every rater.")
+  lev <- agree_levels(all)
+  if (length(lev) < 2) api_error(422, "kappa_categories", "The raters used only one category, so agreement beyond chance cannot be estimated.")
+  chr <- as.data.frame(lapply(cc, as.character), stringsAsFactors = FALSE)
+  exact <- mean(apply(chr, 1, function(r) length(unique(r)) == 1))
+  tables <- list(); ci_t <- sprintf("%g%% CI", ci)
+  wlab <- c(none = "unweighted", linear = "linear weights", quadratic = "quadratic weights")
+  if (length(raters) == 2) {
+    k0 <- cohen_kappa(cc[[1]], cc[[2]], lev, "none", ci)
+    rows <- list(list(stat = "Cohen's kappa", kappa = k0$kappa, se = k0$se, lower = k0$lower, upper = k0$upper, z = k0$z, p = k0$p, interp = kappa_label(k0$kappa)))
+    if (wt != "none") { kw <- cohen_kappa(cc[[1]], cc[[2]], lev, wt, ci)
+      rows[[2]] <- list(stat = paste0("Weighted kappa (", wlab[[wt]], ")"), kappa = kw$kappa, se = kw$se, lower = kw$lower, upper = kw$upper, z = kw$z, p = kw$p, interp = kappa_label(kw$kappa)) }
+    tables[[1]] <- list(id = "kappa", title = sprintf("Cohen's Kappa: %s and %s", raters[1], raters[2]),
+      columns = list(stats_col("stat", "", "text"), stats_col("kappa", "κ"), stats_col("se", "SE"), stats_col("lower", "Lower", superTitle = ci_t), stats_col("upper", "Upper", superTitle = ci_t),
+                     stats_col("z", "z"), stats_col("p", "p", pvalue = TRUE), stats_col("interp", "Agreement", "text")),
+      rows = rows,
+      notes = Filter(Negate(is.null), list(
+        sprintf("N = %d cases rated by both raters; %d categories. Observed agreement %.1f%%, expected by chance %.1f%%.", n, length(lev), 100 * k0$po, 100 * k0$pe),
+        "SE: large-sample standard error (Fleiss, Cohen & Everitt, 1969); z tests κ = 0 with the standard error under the null hypothesis.",
+        if (wt != "none") "Weighted kappa gives partial credit to near-misses, using the order of the categories (ordinal ratings)." else NULL,
+        KAPPA_NOTE)))
+    if (!isFALSE(opt(o, "crosstab", TRUE))) {
+      tab <- k0$tab; js <- seq_along(lev)
+      tables[[length(tables) + 1]] <- list(id = "kappa_table", title = "Agreement Table",
+        columns = c(list(stats_col("cat", raters[1], "text")), lapply(js, function(j) stats_col(paste0("c", j), lev[j], "integer", superTitle = raters[2])), list(stats_col("total", "Total", "integer"))),
+        rows = c(lapply(js, function(i) c(list(cat = lev[i]), stats::setNames(as.list(as.integer(tab[i, ])), paste0("c", js)), list(total = as.integer(sum(tab[i, ]))))),
+                 list(c(list(cat = "Total"), stats::setNames(as.list(as.integer(colSums(tab))), paste0("c", js)), list(total = as.integer(sum(tab)))))),
+        notes = list("Agreements are on the diagonal."))
+    }
+  } else {
+    fl <- irr::kappam.fleiss(chr, detail = TRUE)
+    rows <- list(list(stat = "Fleiss' kappa", kappa = fl$value, z = unname(fl$statistic), p = fl$p.value, interp = kappa_label(fl$value)))
+    pk <- NULL; lk <- NULL
+    if (isTRUE(opt(o, "pairwise", FALSE)) || isTRUE(opt(o, "light", FALSE))) {
+      prs <- utils::combn(length(raters), 2, simplify = FALSE)
+      pk <- lapply(prs, function(ij) c(list(r1 = raters[ij[1]], r2 = raters[ij[2]]), cohen_kappa(cc[[ij[1]]], cc[[ij[2]]], lev, wt, ci)[c("kappa", "se", "lower", "upper", "z", "p")]))
+      lk <- mean(vapply(pk, function(x) x$kappa, 0))
+      if (isTRUE(opt(o, "light", FALSE))) rows[[2]] <- list(stat = "Light's kappa (mean pairwise Cohen's)", kappa = lk, interp = kappa_label(lk))
+    }
+    tables[[1]] <- list(id = "kappa", title = sprintf("Fleiss' Kappa: %d Raters", length(raters)),
+      columns = list(stats_col("stat", "", "text"), stats_col("kappa", "κ"), stats_col("z", "z"), stats_col("p", "p", pvalue = TRUE), stats_col("interp", "Agreement", "text")),
+      rows = rows,
+      notes = list(sprintf("N = %d cases rated by all %d raters; %d categories. All raters agreed exactly on %.1f%% of the cases.", n, length(raters), length(lev), 100 * exact),
+                   "Fleiss' kappa treats the categories as unordered; z tests κ = 0 (Fleiss, 1971).", KAPPA_NOTE))
+    if (isTRUE(opt(o, "categories", FALSE))) {
+      dt <- fl$detail
+      tables[[length(tables) + 1]] <- list(id = "kappa_categories", title = "Fleiss' Kappa by Category",
+        columns = list(stats_col("cat", "Category", "text"), stats_col("kappa", "κ"), stats_col("z", "z"), stats_col("p", "p", pvalue = TRUE), stats_col("interp", "Agreement", "text")),
+        rows = lapply(seq_len(nrow(dt)), function(i) list(cat = sub("^[0-9]+\\. ", "", rownames(dt)[i]), kappa = dt[i, "Kappa"], z = dt[i, "z"], p = dt[i, "p.value"], interp = kappa_label(dt[i, "Kappa"]))),
+        notes = list("Agreement on each category against all the others combined."))
+    }
+    if (isTRUE(opt(o, "pairwise", FALSE))) {
+      tables[[length(tables) + 1]] <- list(id = "kappa_pairs", title = paste0("Cohen's Kappa for Each Pair of Raters", if (wt != "none") paste0(" (", wlab[[wt]], ")") else ""),
+        columns = list(stats_col("r1", "Rater", "text"), stats_col("r2", "Rater", "text"), stats_col("kappa", "κ"), stats_col("se", "SE"), stats_col("lower", "Lower", superTitle = ci_t), stats_col("upper", "Upper", superTitle = ci_t),
+                       stats_col("z", "z"), stats_col("p", "p", pvalue = TRUE), stats_col("interp", "Agreement", "text")),
+        rows = lapply(pk, function(x) c(x, list(interp = kappa_label(x$kappa)))),
+        notes = list(sprintf("Light's kappa (the mean of these values) = %.3f.", lk)))
+    }
+  }
+  if (isTRUE(opt(o, "kripp", FALSE))) {
+    lvl <- opt(o, "krippLevel", "nominal"); if (!lvl %in% c("nominal", "ordinal", "interval", "ratio")) lvl <- "nominal"
+    codes <- sapply(all, function(x) {
+      num <- suppressWarnings(as.numeric(as.character(x)))
+      if (lvl %in% c("interval", "ratio") && !anyNA(num[!is.na(x)])) num else as.numeric(match(as.character(x), lev))
+    })
+    codes <- matrix(codes, nrow = nrow(all))
+    used <- rowSums(!is.na(codes)) >= 2
+    ka <- irr::kripp.alpha(t(codes[used, , drop = FALSE]), method = lvl)
+    tables[[length(tables) + 1]] <- list(id = "kripp", title = "Krippendorff's Alpha",
+      columns = list(stats_col("level", "Level of measurement", "text"), stats_col("alpha", "α"), stats_col("units", "Cases", "integer"), stats_col("raters", "Raters", "integer"), stats_col("interp", "Agreement", "text")),
+      rows = list(list(level = tools::toTitleCase(lvl), alpha = ka$value, units = sum(used), raters = length(raters),
+                       interp = if (is.na(ka$value)) "" else if (ka$value >= 0.80) "Reliable" else if (ka$value >= 0.667) "Tentative" else "Unreliable")),
+      notes = list("Uses every case rated by at least two raters, so missing ratings are allowed. Krippendorff (2004): α ≥ .80 reliable; .667 to .80 allows only tentative conclusions."))
+  }
+  list(tables = tables, plots = list(), n = n)
+}
+
+ICC_MODEL <- c(oneway = "One-way random effects", random = "Two-way random effects", mixed = "Two-way mixed effects")
+run_icc <- function(d, o) {
+  raters <- opt(o, "raters", character(0))
+  if (length(raters) < 2) api_error(422, "icc_raters", "Add at least two raters or measurements (one column each, one row per rated case).")
+  x <- as.data.frame(lapply(d[, raters, drop = FALSE], function(v) as.numeric(v)))
+  x <- x[stats::complete.cases(x), , drop = FALSE]; n <- nrow(x)
+  if (n < 3) api_error(422, "icc_cases", "At least three cases need a rating from every rater.")
+  ci <- num_opt(o, "ciWidth", 95, 50, 99.9); r0 <- num_opt(o, "testValue", 0, -0.99, 0.99)
+  model <- opt(o, "model", "random"); if (!model %in% names(ICC_MODEL)) model <- "random"
+  type <- opt(o, "type", "agreement"); if (!type %in% c("agreement", "consistency")) type <- "agreement"
+  if (model == "oneway") type <- "agreement"
+  one <- function(m, t, u) irr::icc(x, model = if (m == "oneway") "oneway" else "twoway", type = t, unit = u, r0 = r0, conf.level = ci / 100)
+  row <- function(r) list(icc = r$value, lower = r$lbound, upper = r$ubound, f = r$Fvalue, df1 = r$df1, df2 = r$df2, p = r$p.value, interp = icc_label(r$value))
+  s1 <- one(model, type, "single"); sk <- one(model, type, "average")
+  ci_t <- sprintf("%g%% CI", ci); tt <- sprintf("Test against %g", r0)
+  cols <- list(stats_col("icc", "ICC"), stats_col("lower", "Lower", superTitle = ci_t), stats_col("upper", "Upper", superTitle = ci_t),
+               stats_col("f", "F", superTitle = tt), stats_col("df1", "df1", superTitle = tt), stats_col("df2", "df2", superTitle = tt),
+               stats_col("p", "p", superTitle = tt, pvalue = TRUE), stats_col("interp", "Reliability", "text"))
+  sf <- if (model == "oneway") c("ICC(1,1)", "ICC(1,k)") else if (type == "agreement") c("ICC(2,1)", "ICC(2,k)") else c("ICC(3,1)", "ICC(3,k)")
+  tables <- list(list(id = "icc", title = sprintf("Intraclass Correlation: %s, %s", ICC_MODEL[[model]], if (type == "agreement") "absolute agreement" else "consistency"),
+    columns = c(list(stats_col("unit", "", "text"), stats_col("name", "Form", "text")), cols),
+    rows = list(c(list(unit = "Single rater", name = s1$icc.name), row(s1)), c(list(unit = sprintf("Average of %d raters", length(raters)), name = sk$icc.name), row(sk))),
+    notes = Filter(Negate(is.null), list(
+      sprintf("N = %d cases rated by all %d raters. Form in McGraw & Wong (1996) notation; Shrout & Fleiss (1979): %s and %s.", n, length(raters), sf[1], sf[2]),
+      "Single rater: the reliability of one rater's scores. Average: the reliability of the mean of all raters' scores (report it when the mean is analysed).",
+      if (model == "mixed") "Two-way mixed: these raters are the only raters of interest. The values equal the two-way random model; only the interpretation differs." else NULL,
+      "Reliability: Koo & Li (2016): below .50 poor, .50–.75 moderate, .75–.90 good, above .90 excellent. Judge it by the confidence interval as well as the estimate."))))
+  if (isTRUE(opt(o, "allForms", FALSE))) {
+    forms <- list(c("ICC1", "oneway", "agreement", "single", "One-way random, single rater"), c("ICC2", "random", "agreement", "single", "Two-way random, absolute agreement, single rater"),
+                  c("ICC3", "mixed", "consistency", "single", "Two-way mixed, consistency, single rater"), c("ICC1k", "oneway", "agreement", "average", "One-way random, average of raters"),
+                  c("ICC2k", "random", "agreement", "average", "Two-way random, absolute agreement, average of raters"), c("ICC3k", "mixed", "consistency", "average", "Two-way mixed, consistency, average of raters"))
+    tables[[length(tables) + 1]] <- list(id = "icc_forms", title = "All Six ICC Forms (Shrout & Fleiss)",
+      columns = c(list(stats_col("form", "Form", "text"), stats_col("desc", "Model", "text")), cols),
+      rows = lapply(forms, function(f) c(list(form = f[1], desc = f[5]), row(one(f[2], f[3], f[4])))),
+      notes = list("Shrout & Fleiss (1979) naming, as in psych::ICC and SPSS."))
+  }
+  if (isTRUE(opt(o, "desc", FALSE))) {
+    tables[[length(tables) + 1]] <- list(id = "icc_desc", title = "Rater Descriptives",
+      columns = list(stats_col("rater", "Rater", "text"), stats_col("n", "N", "integer"), stats_col("mean", "Mean"), stats_col("sd", "SD"), stats_col("min", "Minimum"), stats_col("max", "Maximum")),
+      rows = lapply(raters, function(r) list(rater = r, n = n, mean = mean(x[[r]]), sd = stats::sd(x[[r]]), min = min(x[[r]]), max = max(x[[r]]))),
+      notes = list("Large differences between the rater means lower absolute agreement but not consistency."))
+  }
+  list(tables = tables, plots = list(), n = n)
+}
+STATS_MORE_RUN$kappa <- run_kappa
+STATS_MORE_RUN$icc <- run_icc
+
+# ---- Equivalence tests (TOST: two one-sided tests; Lakens, 2017) -------------------------------------------------
+# Added to the t-tests and the correlation matrix. The bounds are raw differences or Cohen's d; d bounds become raw
+# bounds with the standardiser TOSTER uses (pooled SD for Student's t, average SD for Welch's t, SD of the differences
+# for paired samples, SD for one sample), so every value equals TOSTER::t_TOST. For one sample the bounds are around the
+# test value. Correlations use Fisher's z (as TOSTER::z_cor_test).
+TOST_PROCS <- c("ttestIS", "ttestPS", "ttestOneS", "corrMatrix")
+
+tost_verdict <- function(p_eq, p_nhst, alpha) {
+  eq <- p_eq < alpha; dif <- p_nhst < alpha
+  if (eq && !dif) "Equivalent" else if (eq && dif) "Equivalent (trivial difference)" else if (dif) "Not equivalent (different)" else "Inconclusive"
+}
+
+#' One TOST on a mean difference: estimate m, standard error se, df, raw bounds lo/hi.
+tost_t <- function(m, se, df, lo, hi, alpha) {
+  tl <- (m - lo) / se; tu <- (m - hi) / se; t0 <- m / se
+  pl <- stats::pt(tl, df, lower.tail = FALSE); pu <- stats::pt(tu, df); crit <- stats::qt(1 - alpha, df)
+  list(m = m, se = se, df = df, lo = lo, hi = hi, tl = tl, pl = pl, tu = tu, pu = pu, p = max(pl, pu), t0 = t0, p0 = 2 * stats::pt(-abs(t0), df),
+       cl = m - crit * se, cu = m + crit * se)
+}
+
+run_tost <- function(proc, d, o) {
+  alpha <- num_opt(o, "eqAlpha", 0.05, 0.001, 0.25)
+  lo_in <- num_opt(o, "eqLow", if (proc == "corrMatrix") -0.3 else -0.5); hi_in <- num_opt(o, "eqHigh", if (proc == "corrMatrix") 0.3 else 0.5)
+  if (lo_in >= hi_in) api_error(422, "tost_bounds", "The lower equivalence bound must be below the upper bound.")
+  ci_t <- sprintf("%g%% CI", 100 * (1 - 2 * alpha))
+  if (proc == "corrMatrix") {
+    if (lo_in <= -1 || hi_in >= 1) api_error(422, "tost_bounds", "Correlation bounds must lie between -1 and 1.")
+    vars <- Filter(function(v) !is.factor(d[[v]]), o$vars); rows <- list(); out <- list()
+    for (i in seq_along(vars)) for (j in seq_along(vars)) if (i < j) {
+      x <- as.numeric(d[[vars[i]]]); y <- as.numeric(d[[vars[j]]]); ok <- !is.na(x) & !is.na(y); n <- sum(ok)
+      if (n < 4) next
+      r <- stats::cor(x[ok], y[ok]); z <- atanh(r); se <- 1 / sqrt(n - 3)
+      zl <- (z - atanh(lo_in)) / se; zu <- (z - atanh(hi_in)) / se
+      pl <- stats::pnorm(zl, lower.tail = FALSE); pu <- stats::pnorm(zu); p0 <- 2 * stats::pnorm(-abs(z / se)); crit <- stats::qnorm(1 - alpha)
+      lab <- paste(vars[i], "–", vars[j])
+      rows <- c(rows, list(list(var = lab, test = "Lower bound", bound = lo_in, stat = zl, p = pl), list(var = lab, test = "Upper bound", bound = hi_in, stat = zu, p = pu)))
+      out[[length(out) + 1]] <- list(var = lab, n = n, est = r, cl = tanh(z - crit * se), cu = tanh(z + crit * se), p = max(pl, pu), p0 = p0, result = tost_verdict(max(pl, pu), p0, alpha))
+    }
+    if (!length(out)) return(NULL)
+    return(list(tables = list(
+      list(id = "tost", title = "Equivalence Test (TOST)", section = "Equivalence Test",
+           columns = list(stats_col("var", "", "text", combineBelow = TRUE), stats_col("test", "Test", "text"), stats_col("bound", "Bound (r)"), stats_col("stat", "z"), stats_col("p", "p", pvalue = TRUE)),
+           rows = rows, notes = list(sprintf("Pearson correlations; H₀: r ≤ %s or r ≥ %s. Fisher's z test against each bound, α = %g per test.", format(lo_in), format(hi_in), alpha))),
+      list(id = "tost_result", title = "Equivalence Result", section = "Equivalence Test",
+           columns = list(stats_col("var", "", "text"), stats_col("n", "N", "integer"), stats_col("est", "r"), stats_col("cl", "Lower", superTitle = ci_t), stats_col("cu", "Upper", superTitle = ci_t),
+                          stats_col("p", "p (TOST)", pvalue = TRUE), stats_col("p0", "p (r = 0)", pvalue = TRUE), stats_col("result", "Result", "text")),
+           rows = out, notes = list(tost_note(alpha, sprintf("[%s, %s]", format(lo_in), format(hi_in)))))),
+      plot = tost_plot(out, lo_in, hi_in, "Correlation (r)", ci_t)))
+  }
+  sets <- list()
+  if (proc == "ttestIS") {
+    g <- o$group[[1]]; f <- droplevels(as.factor(d[[g]])); lv <- levels(f)
+    welch <- isTRUE(o$welchs) && !isTRUE(o$students)
+    for (v in o$vars) {
+      ok <- !is.na(d[[v]]) & !is.na(f); x <- as.numeric(d[[v]][ok & f == lv[1]]); y <- as.numeric(d[[v]][ok & f == lv[2]])
+      n1 <- length(x); n2 <- length(y); if (n1 < 2 || n2 < 2) next
+      v1 <- stats::var(x); v2 <- stats::var(y)
+      if (welch) { se <- sqrt(v1 / n1 + v2 / n2); df <- (v1 / n1 + v2 / n2)^2 / ((v1 / n1)^2 / (n1 - 1) + (v2 / n2)^2 / (n2 - 1)); sdd <- sqrt((v1 + v2) / 2) }
+      else { sp <- sqrt(((n1 - 1) * v1 + (n2 - 1) * v2) / (n1 + n2 - 2)); se <- sp * sqrt(1 / n1 + 1 / n2); df <- n1 + n2 - 2; sdd <- sp }
+      sets[[v]] <- list(m = mean(x) - mean(y), se = se, df = df, sd = sdd, n = n1 + n2)
+    }
+    what <- sprintf("Mean difference %s − %s (%s's t).", lv[1], lv[2], if (welch) "Welch" else "Student")
+    sdname <- if (welch) "the average of the two group SDs" else "the pooled SD"
+  } else if (proc == "ttestPS") {
+    for (p in o$pairs) {
+      ok <- !is.na(d[[p$i1]]) & !is.na(d[[p$i2]]); dd <- as.numeric(d[[p$i1]][ok]) - as.numeric(d[[p$i2]][ok]); n <- length(dd); if (n < 2) next
+      sets[[paste(p$i1, "–", p$i2)]] <- list(m = mean(dd), se = stats::sd(dd) / sqrt(n), df = n - 1, sd = stats::sd(dd), n = n)
+    }
+    what <- "Mean of the paired differences."
+    sdname <- "the SD of the differences"
+  } else {
+    mu <- num_opt(o, "testValue", 0)
+    for (v in o$vars) { x <- as.numeric(stats::na.omit(d[[v]])); n <- length(x); if (n < 2) next
+      sets[[v]] <- list(m = mean(x) - mu, se = stats::sd(x) / sqrt(n), df = n - 1, sd = stats::sd(x), n = n) }
+    what <- sprintf("Mean minus the test value (%s); the bounds are around the test value.", format(mu)); sdname <- "the SD"
+  }
+  if (!length(sets)) return(NULL)
+  smd <- !identical(opt(o, "eqBound", "d"), "raw")
+  rows <- list(); out <- list(); bl <- numeric(0); bh <- numeric(0)
+  for (nm in names(sets)) {
+    s <- sets[[nm]]; lo <- if (smd) lo_in * s$sd else lo_in; hi <- if (smd) hi_in * s$sd else hi_in
+    r <- tost_t(s$m, s$se, s$df, lo, hi, alpha); bl <- c(bl, lo); bh <- c(bh, hi)
+    rows <- c(rows, list(list(var = nm, test = "Lower bound", bound = lo, bd = if (smd) lo_in else lo / s$sd, stat = r$tl, df = r$df, p = r$pl),
+                         list(var = nm, test = "Upper bound", bound = hi, bd = if (smd) hi_in else hi / s$sd, stat = r$tu, df = r$df, p = r$pu)))
+    out[[length(out) + 1]] <- list(var = nm, n = s$n, est = r$m, se = r$se, cl = r$cl, cu = r$cu, p = r$p, p0 = r$p0, result = tost_verdict(r$p, r$p0, alpha), lo = lo, hi = hi)
+  }
+  bnote <- if (smd) sprintf("Bounds set as Cohen's d = %s to %s and converted to raw units with %s.", format(lo_in), format(hi_in), sdname)
+           else sprintf("Bounds set in raw units (%s to %s); d shows them divided by %s.", format(lo_in), format(hi_in), sdname)
+  list(tables = list(
+    list(id = "tost", title = "Equivalence Test (TOST)", section = "Equivalence Test",
+         columns = list(stats_col("var", "", "text", combineBelow = TRUE), stats_col("test", "Test", "text"), stats_col("bound", "Bound"), stats_col("bd", "Bound (d)"), stats_col("stat", "t"), stats_col("df", "df"), stats_col("p", "p", pvalue = TRUE)),
+         rows = rows, notes = list(paste(what, bnote, sprintf("One-sided t test against each bound, α = %g per test.", alpha)))),
+    list(id = "tost_result", title = "Equivalence Result", section = "Equivalence Test",
+         columns = list(stats_col("var", "", "text"), stats_col("est", "Difference"), stats_col("se", "SE"), stats_col("cl", "Lower", superTitle = ci_t), stats_col("cu", "Upper", superTitle = ci_t),
+                        stats_col("p", "p (TOST)", pvalue = TRUE), stats_col("p0", "p (difference = 0)", pvalue = TRUE), stats_col("result", "Result", "text")),
+         rows = lapply(out, function(x) x[c("var", "est", "se", "cl", "cu", "p", "p0", "result")]),
+         notes = list(tost_note(alpha, "the bounds")))),
+    plot = tost_plot(out, bl, bh, if (proc == "ttestOneS") "Difference from the test value" else "Mean difference", ci_t))
+}
+
+tost_note <- function(alpha, bounds) sprintf(paste0("Equivalent: the %g%% CI lies inside %s, so both one-sided tests are significant (p (TOST) < %g). ",
+  "Trivial difference: equivalent, yet different from 0. Inconclusive: neither equivalent nor different; more data are needed (Lakens, Scheel & Isager, 2018)."), 100 * (1 - 2 * alpha), bounds, alpha)
+
+#' Each estimate with its 1 - 2 alpha CI (thick) against the equivalence bounds (shaded).
+tost_plot <- function(out, lo, hi, xlab, ci_t) {
+  k <- length(out); if (!k) return(NULL)
+  lo <- rep_len(lo, k); hi <- rep_len(hi, k)
+  stats_png(function() {
+    labs <- vapply(out, `[[`, "", "var"); y <- rev(seq_len(k))
+    xr <- range(c(lo, hi, vapply(out, `[[`, 0, "cl"), vapply(out, `[[`, 0, "cu"), 0)); xr <- xr + c(-1, 1) * diff(xr) * 0.08
+    graphics::par(mar = c(4.2, max(6, max(nchar(labs)) * 0.55), 2.4, 1))
+    graphics::plot(NA, xlim = xr, ylim = c(0.4, k + 0.6), yaxt = "n", xlab = xlab, ylab = "", bty = "n")
+    graphics::axis(2, at = y, labels = labs, las = 1, tick = FALSE, cex.axis = 0.9)
+    for (i in seq_len(k)) graphics::rect(lo[i], y[i] - 0.35, hi[i], y[i] + 0.35, col = "#E0F2FE", border = NA)
+    graphics::abline(v = 0, col = "#94A3B8", lty = 3)
+    for (i in seq_len(k)) {
+      graphics::segments(lo[i], y[i] - 0.35, lo[i], y[i] + 0.35, col = "#0369A1", lty = 2); graphics::segments(hi[i], y[i] - 0.35, hi[i], y[i] + 0.35, col = "#0369A1", lty = 2)
+      eq <- startsWith(out[[i]]$result, "Equivalent"); col <- if (eq) "#15803D" else "#B45309"
+      graphics::segments(out[[i]]$cl, y[i], out[[i]]$cu, y[i], lwd = 3, col = col); graphics::points(out[[i]]$est, y[i], pch = 19, cex = 1.2, col = col)
+    }
+    graphics::legend(x = mean(xr), y = graphics::par("usr")[4], xjust = 0.5, yjust = 0, horiz = TRUE, xpd = TRUE, bty = "n", cex = 0.8,
+                     legend = c("Bounds", paste(ci_t, "equivalent"), paste(ci_t, "not shown equivalent")), col = c("#0369A1", "#15803D", "#B45309"), lty = c(2, 1, 1), lwd = c(1, 3, 3))
+  }, title = "Equivalence plot", alt = "Estimates with their confidence intervals against the equivalence bounds", h = max(2.6, 1.3 + 0.55 * k))
+}
+
+#' R code for the equivalence test with TOSTER (Lakens' package; the same values).
+tost_code <- function(s, q) {
+  o <- s$options
+  if (!s$proc %in% TOST_PROCS || !isTRUE(o$eqTest)) return(character(0))
+  a <- o$eqAlpha %||% 0.05; lo <- o$eqLow %||% (if (s$proc == "corrMatrix") -0.3 else -0.5); hi <- o$eqHigh %||% (if (s$proc == "corrMatrix") 0.3 else 0.5)
+  ty <- if (identical(o$eqBound, "raw")) "raw" else "SMD"
+  b <- sprintf("low_eqbound = %s, high_eqbound = %s, eqbound_type = %s, alpha = %s", lo, hi, q(ty), a)
+  body <- switch(s$proc,
+    ttestIS = vapply(unlist(o$vars), function(v) sprintf("t_TOST(formula = `%s` ~ `%s`, data = data, %s, var.equal = %s)", v, unlist(o$group)[1], b,
+                                                         if (isTRUE(o$welchs) && !isTRUE(o$students)) "FALSE" else "TRUE"), ""),
+    ttestPS = vapply(o$pairs, function(p) sprintf("t_TOST(x = data[[%s]], y = data[[%s]], paired = TRUE, %s)", q(p$i1), q(p$i2), b), ""),
+    ttestOneS = vapply(unlist(o$vars), function(v) sprintf("t_TOST(x = data[[%s]] - %s, %s)   # bounds around the test value", q(v), o$testValue %||% 0, b), ""),
+    corrMatrix = { v <- unlist(o$vars); pr <- utils::combn(length(v), 2, simplify = FALSE)
+      vapply(pr, function(ij) sprintf("z_cor_test(data[[%s]], data[[%s]], alternative = \"equivalence\", null = c(%s, %s), alpha = %s)", q(v[ij[1]]), q(v[ij[2]]), lo, hi, a), "") })
+  c("", "# Equivalence test (TOST) added by PathLab SEM; the same values with TOSTER:", "library(TOSTER)", body)
+}
+
+# ---- Robust methods (WRS2; Mair & Wilcox, 2020) and bootstrap confidence intervals (boot) ----------------------------
+# Options of the t-tests, the one-way and factorial ANOVA, the descriptives and the correlation matrix (off by default):
+# Yuen's trimmed-mean t-test (independent: WRS2::yuen, paired: WRS2::yuend), the trimmed-mean ANOVA (WRS2::t1way with
+# WRS2::lincon post hoc comparisons; t2way / t3way for two or three factors), and percentile and BCa bootstrap intervals
+# for means and Pearson correlations (boot::boot, boot::boot.ci; seed 2026, so the intervals are reproducible).
+ROBUST_PROCS <- c("ttestIS", "ttestPS", "anovaOneW", "ANOVA")
+BOOT_PROCS <- c("descriptives", "corrMatrix")
+
+run_robust <- function(proc, d, o) {
+  if (!requireNamespace("WRS2", quietly = TRUE)) api_error(501, "stats_unavailable", "The WRS2 R package is not installed on the analysis server.", "Run Rscript backend/install_packages.R.")
+  tr <- num_opt(o, "trim", 0.2, 0, 0.45)
+  trn <- sprintf("%g%% trimmed means (%g%% cut from each end).", 100 * tr, 100 * tr)
+  if (proc == "ttestIS") {
+    g <- o$group[[1]]
+    rows <- lapply(o$vars, function(v) {
+      dd <- data.frame(y = as.numeric(d[[v]]), g = droplevels(as.factor(d[[g]]))); dd <- dd[stats::complete.cases(dd), ]
+      r <- WRS2::yuen(y ~ g, data = dd, tr = tr)
+      list(var = v, diff = r$diff, lower = r$conf.int[1], upper = r$conf.int[2], t = r$test, df = r$df, p = r$p.value, es = r$effsize)
+    })
+    return(list(robust_table("robust_ttest", "Robust Test: Yuen's Trimmed-Mean t-Test", rows, TRUE,
+      c(trn, sprintf("Difference = trimmed mean of %s minus %s; 95%% CI of the difference. ξ: explanatory measure of effect size (.10 small, .30 medium, .50 large; Wilcox & Tian, 2011).",
+                     levels(droplevels(as.factor(d[[g]])))[1], levels(droplevels(as.factor(d[[g]])))[2])))))
+  }
+  if (proc == "ttestPS") {
+    rows <- lapply(o$pairs, function(p) {
+      ok <- !is.na(d[[p$i1]]) & !is.na(d[[p$i2]])
+      r <- WRS2::yuend(as.numeric(d[[p$i1]][ok]), as.numeric(d[[p$i2]][ok]), tr = tr)
+      list(var = paste(p$i1, "–", p$i2), diff = r$diff, lower = r$conf.int[1], upper = r$conf.int[2], t = r$test, df = r$df, p = r$p.value, es = r$effsize)
+    })
+    return(list(robust_table("robust_ttest", "Robust Test: Yuen's Trimmed-Mean Paired t-Test", rows, TRUE, c(trn, "Difference of the trimmed means; 95% CI. ξ: explanatory measure of effect size."))))
+  }
+  if (proc == "anovaOneW") {
+    g <- o$group[[1]]; out <- list(); ph <- list()
+    rows <- lapply(o$deps, function(v) {
+      dd <- data.frame(y = as.numeric(d[[v]]), g = droplevels(as.factor(d[[g]]))); dd <- dd[stats::complete.cases(dd), ]
+      set.seed(2026); r <- WRS2::t1way(y ~ g, data = dd, tr = tr, nboot = 200)
+      lc <- WRS2::lincon(y ~ g, data = dd, tr = tr); cm <- lc$comp
+      ph[[length(ph) + 1]] <<- lapply(seq_len(nrow(cm)), function(i) list(var = v, g1 = lc$fnames[cm[i, 1]], g2 = lc$fnames[cm[i, 2]], psi = cm[i, "psihat"], lower = cm[i, "ci.lower"], upper = cm[i, "ci.upper"], p = cm[i, "p.value"]))
+      list(var = v, f = r$test, df1 = r$df1, df2 = r$df2, p = r$p.value, es = r$effsize, eslo = r$effsize_ci[1], eshi = r$effsize_ci[2])
+    })
+    return(list(
+      list(id = "robust_anova", title = "Robust ANOVA: Trimmed Means (Welch-type)", section = "Robust Tests", rows = rows,
+           columns = list(stats_col("var", "", "text"), stats_col("f", "F"), stats_col("df1", "df1"), stats_col("df2", "df2"), stats_col("p", "p", pvalue = TRUE), stats_col("es", "ξ"),
+                          stats_col("eslo", "Lower", superTitle = "ξ 95% CI"), stats_col("eshi", "Upper", superTitle = "ξ 95% CI")),
+           notes = list(paste(trn, "Heteroscedastic one-way ANOVA for trimmed means (WRS2::t1way); ξ: explanatory measure of effect size with a bootstrap CI."))),
+      list(id = "robust_posthoc", title = "Robust Post Hoc Comparisons (Trimmed Means)", section = "Robust Tests", rows = unlist(ph, recursive = FALSE),
+           columns = list(stats_col("var", "", "text", combineBelow = TRUE), stats_col("g1", "Group", "text"), stats_col("g2", "Group", "text"), stats_col("psi", "Difference"),
+                          stats_col("lower", "Lower", superTitle = "95% CI"), stats_col("upper", "Upper", superTitle = "95% CI"), stats_col("p", "p", pvalue = TRUE)),
+           notes = list("Linear contrasts of trimmed means (WRS2::lincon); the CIs and p values are adjusted for all pairwise comparisons."))))
+  }
+  if (proc == "ANOVA") {
+    f <- unlist(o$factors)
+    if (length(f) > 3) api_error(422, "robust_factors", "The robust (trimmed-mean) ANOVA takes up to three factors.")
+    dd <- data.frame(y = as.numeric(d[[o$dep]])); nm <- c("A", "B", "C")[seq_along(f)]
+    for (i in seq_along(f)) dd[[nm[i]]] <- droplevels(as.factor(d[[f[i]]]))
+    dd <- dd[stats::complete.cases(dd), , drop = FALSE]
+    form <- stats::as.formula(paste("y ~", paste(nm, collapse = " * ")))
+    lab <- function(x) paste(f[match(strsplit(x, "")[[1]], nm)], collapse = " ✱ ")
+    if (length(f) == 1) { set.seed(2026); r <- WRS2::t1way(form, data = dd, tr = tr, nboot = 200); rows <- list(list(term = f, stat = r$test, p = r$p.value)) }
+    else {
+      r <- if (length(f) == 2) WRS2::t2way(form, data = dd, tr = tr) else WRS2::t3way(form, data = dd, tr = tr)
+      terms <- if (length(f) == 2) c("A", "B", "AB") else c("A", "B", "C", "AB", "AC", "BC", "ABC")
+      rows <- lapply(terms, function(tm) list(term = gsub(" ✱ ", " × ", lab(tm)), stat = r[[paste0("Q", tolower(tm))]], p = r[[paste0(tm, ".p.value")]]))
+    }
+    return(list(list(id = "robust_anova", title = "Robust Factorial ANOVA: Trimmed Means", section = "Robust Tests", rows = rows,
+      columns = list(stats_col("term", "", "text"), stats_col("stat", if (length(f) == 1) "F" else "Q"), stats_col("p", "p", pvalue = TRUE)),
+      notes = list(paste(trn, if (length(f) == 1) "WRS2::t1way." else sprintf("Q: test statistic for trimmed means (WRS2::t%dway; Wilcox, 2017); robust to unequal variances and outliers.", length(f)))))))
+  }
+  NULL
+}
+
+robust_table <- function(id, title, rows, es, notes) list(id = id, title = title, section = "Robust Tests", rows = rows,
+  columns = c(list(stats_col("var", "", "text"), stats_col("diff", "Difference"), stats_col("lower", "Lower", superTitle = "95% CI"), stats_col("upper", "Upper", superTitle = "95% CI"),
+                   stats_col("t", "t"), stats_col("df", "df"), stats_col("p", "p", pvalue = TRUE)), if (es) list(stats_col("es", "ξ"))), notes = as.list(notes))
+
+run_boot <- function(proc, d, o) {
+  R <- as.integer(num_opt(o, "bootN", 2000, 200, 20000)); lvl <- num_opt(o, "ciWidth", 95, 50, 99.9) / 100
+  ci <- function(b) {
+    bc <- tryCatch(boot::boot.ci(b, conf = lvl, type = c("perc", "bca")), error = function(e) NULL)
+    list(pl = if (!is.null(bc$percent)) bc$percent[4] else NA, pu = if (!is.null(bc$percent)) bc$percent[5] else NA, bl = if (!is.null(bc$bca)) bc$bca[4] else NA, bu = if (!is.null(bc$bca)) bc$bca[5] else NA)
+  }
+  ct <- sprintf("%g%% CI", 100 * lvl)
+  cols <- function(first) c(first, list(stats_col("pl", "Lower", superTitle = paste("Percentile", ct)), stats_col("pu", "Upper", superTitle = paste("Percentile", ct)),
+                                        stats_col("bl", "Lower", superTitle = paste("BCa", ct)), stats_col("bu", "Upper", superTitle = paste("BCa", ct))))
+  note <- sprintf("%d bootstrap resamples (seed 2026). BCa: bias-corrected and accelerated interval (Efron & Tibshirani, 1993); it is preferred when the two differ.", R)
+  if (proc == "descriptives") {
+    vars <- Filter(function(v) is.numeric(d[[v]]), o$vars); if (!length(vars)) return(NULL)
+    rows <- lapply(vars, function(v) { x <- as.numeric(stats::na.omit(d[[v]])); set.seed(2026)
+      b <- boot::boot(x, function(x, i) mean(x[i]), R = R); c(list(var = v, n = length(x), est = mean(x)), ci(b)) })
+    return(list(list(id = "boot_mean", title = "Bootstrap Confidence Intervals for the Mean", section = "Bootstrap", rows = rows,
+      columns = cols(list(stats_col("var", "", "text"), stats_col("n", "N", "integer"), stats_col("est", "Mean"))), notes = list(note))))
+  }
+  vars <- Filter(function(v) is.numeric(d[[v]]), o$vars); rows <- list()
+  for (i in seq_along(vars)) for (j in seq_along(vars)) if (i < j) {
+    xy <- stats::na.omit(data.frame(x = as.numeric(d[[vars[i]]]), y = as.numeric(d[[vars[j]]]))); if (nrow(xy) < 4) next
+    set.seed(2026); b <- boot::boot(xy, function(z, k) stats::cor(z$x[k], z$y[k]), R = R)
+    rows[[length(rows) + 1]] <- c(list(var = paste(vars[i], "–", vars[j]), n = nrow(xy), est = stats::cor(xy$x, xy$y)), ci(b))
+  }
+  if (!length(rows)) return(NULL)
+  list(list(id = "boot_cor", title = "Bootstrap Confidence Intervals for Pearson's r", section = "Bootstrap", rows = rows,
+    columns = cols(list(stats_col("var", "", "text"), stats_col("n", "N", "integer"), stats_col("est", "r"))), notes = list(paste(note, "Cases resampled in pairs."))))
+}
+
+#' R code for the robust tests and bootstrap intervals (WRS2, boot).
+robust_code <- function(s, q) {
+  o <- s$options; out <- character(0); tr <- o$trim %||% 0.2
+  if (s$proc %in% ROBUST_PROCS && isTRUE(o$robust)) {
+    out <- c("", "# Robust tests added by PathLab SEM (WRS2):", "library(WRS2)", switch(s$proc,
+      ttestIS = vapply(unlist(o$vars), function(v) sprintf("yuen(`%s` ~ factor(`%s`), data = data, tr = %s)", v, unlist(o$group)[1], tr), ""),
+      ttestPS = vapply(o$pairs, function(p) sprintf("ok <- complete.cases(data[[%s]], data[[%s]]); yuend(data[[%s]][ok], data[[%s]][ok], tr = %s)", q(p$i1), q(p$i2), q(p$i1), q(p$i2), tr), ""),
+      anovaOneW = unlist(lapply(unlist(o$deps), function(v) c(sprintf("set.seed(2026); t1way(`%s` ~ factor(`%s`), data = data, tr = %s, nboot = 200)", v, unlist(o$group)[1], tr),
+                                                               sprintf("lincon(`%s` ~ factor(`%s`), data = data, tr = %s)", v, unlist(o$group)[1], tr)))),
+      ANOVA = { f <- unlist(o$factors); sprintf("%s(`%s` ~ %s, data = data, tr = %s)", c("t1way", "t2way", "t3way")[length(f)], o$dep, paste(sprintf("factor(`%s`)", f), collapse = " * "), tr) }))
+  }
+  if (s$proc %in% BOOT_PROCS && isTRUE(o$bootCI)) {
+    R <- o$bootN %||% 2000; lvl <- (o$ciWidth %||% 95) / 100
+    out <- c(out, "", "# Bootstrap confidence intervals added by PathLab SEM (boot):", "library(boot)",
+      if (s$proc == "descriptives") sprintf("for (v in c(%s)) { x <- na.omit(data[[v]]); set.seed(2026); print(boot.ci(boot(x, function(x, i) mean(x[i]), R = %s), conf = %s, type = c(\"perc\", \"bca\"))) }",
+                                            paste(vapply(unlist(o$vars), q, ""), collapse = ", "), R, lvl)
+      else sprintf("xy <- na.omit(data[, c(%s)])   # each pair: set.seed(2026); boot.ci(boot(xy, function(z, k) cor(z[k, 1], z[k, 2]), R = %s), conf = %s, type = c(\"perc\", \"bca\"))",
+                   paste(vapply(unlist(o$vars)[1:2], q, ""), collapse = ", "), R, lvl))
+  }
+  if (s$proc == "contTables" && isTRUE(o$bfCont)) {
+    st <- o$bfSample %||% "indepMulti"
+    out <- c(out, "", "# Bayesian contingency table test added by PathLab SEM (BayesFactor):", "library(BayesFactor)",
+             sprintf("contingencyTableBF(table(data[[%s]], data[[%s]]), sampleType = %s%s)", q(unlist(o$rows)[1]), q(unlist(o$cols)[1]), q(st), if (st == "indepMulti") ", fixedMargin = \"rows\"" else ""))
+  }
+  out
+}
+
+# ---- More Bayesian analyses (BayesFactor, as in JASP) ------------------------------------------------------------
+#' Bayesian contingency table (BayesFactor::contingencyTableBF), added to the Contingency Tables analysis.
+run_bf_contingency <- function(d, o) {
+  r <- o$rows[[1]]; cc <- o$cols[[1]]
+  tab <- table(droplevels(as.factor(d[[r]])), droplevels(as.factor(d[[cc]])))
+  st <- opt(o, "bfSample", "indepMulti"); if (!st %in% c("indepMulti", "jointMulti", "poisson", "hypergeom")) st <- "indepMulti"
+  if (st == "hypergeom" && (nrow(tab) != 2 || ncol(tab) != 2)) api_error(422, "bf_hypergeom", "The hypergeometric sampling plan needs a 2 × 2 table.")
+  bf <- if (st == "indepMulti") BayesFactor::contingencyTableBF(tab, sampleType = st, fixedMargin = "rows") else BayesFactor::contingencyTableBF(tab, sampleType = st)
+  e <- BayesFactor::extractBF(bf)
+  lab <- c(indepMulti = "Independent multinomial (row totals fixed)", jointMulti = "Joint multinomial (total fixed)", poisson = "Poisson (nothing fixed)", hypergeom = "Hypergeometric (both margins fixed)")
+  list(id = "bf_cont", title = "Bayesian Contingency Table Test", section = "Bayesian Analysis",
+       rows = list(list(plan = lab[[st]], bf10 = e$bf[1], bf01 = 1 / e$bf[1], error = 100 * e$error[1])),
+       columns = list(stats_col("plan", "Sampling plan", "text"), stats_col("bf10", "BF₁₀"), stats_col("bf01", "BF₀₁"), stats_col("error", "error %")),
+       notes = list(sprintf("BF₁₀: evidence for an association between %s and %s against independence (Gunel & Dickey, 1974; BayesFactor::contingencyTableBF, prior concentration a = 1). BF > 3: moderate, > 10: strong evidence.", r, cc)))
+}
+
+#' Bayesian repeated measures ANOVA (BayesFactor::anovaBF with participants as a random factor), as in JASP.
+run_banova_rm <- function(d, o) {
+  ms <- unlist(o$measures); bs <- unlist(o$bs)
+  if (length(ms) < 2) api_error(422, "banovarm_measures", "Add at least two repeated measures.")
+  w <- d[, c(ms, bs), drop = FALSE]; w <- w[stats::complete.cases(w), , drop = FALSE]; n <- nrow(w)
+  if (n < 3) api_error(422, "banovarm_cases", "At least three cases need every measure.")
+  long <- data.frame(id = factor(rep(seq_len(n), length(ms))), cond = factor(rep(ms, each = n), levels = ms), value = unlist(lapply(ms, function(m) as.numeric(w[[m]]))))
+  nb <- if (length(bs)) paste0("B", seq_along(bs)) else character(0); for (i in seq_along(bs)) long[[nb[i]]] <- factor(rep(as.character(w[[bs[i]]]), length(ms)))
+  form <- stats::as.formula(paste("value ~", paste(c("cond", nb), collapse = " * "), "+ id"))
+  set.seed(as.integer(num_opt(o, "seed", 2026)))
+  bf <- BayesFactor::anovaBF(form, data = long, whichRandom = "id", rscaleFixed = opt(o, "rscale", "medium"), progress = FALSE)
+  e <- BayesFactor::extractBF(bf)
+  rn <- function(x) { x <- gsub(" \\+ id$", "", x); x <- gsub("cond", o$rmLabel %||% "RM factor", x); for (i in seq_along(bs)) x <- gsub(nb[i], bs[i], x, fixed = TRUE); gsub(":", " × ", x) }
+  rows <- lapply(seq_len(nrow(e)), function(i) list(model = rn(rownames(e)[i]), bf10 = e$bf[i], bf01 = 1 / e$bf[i], error = 100 * e$error[i]))
+  rows <- rows[order(-vapply(rows, `[[`, 0, "bf10"))]
+  list(tables = list(list(id = "banova", title = "Bayesian Repeated Measures ANOVA: Model Comparison",
+    rows = c(list(list(model = "Null model (participants)", bf10 = 1, bf01 = 1, error = NULL)), rows),
+    columns = list(stats_col("model", "Model", "text"), stats_col("bf10", "BF₁₀"), stats_col("bf01", "BF₀₁"), stats_col("error", "error %")),
+    notes = list(sprintf("Bayes factors against the null model with participants as a random factor (Rouder et al., 2012; BayesFactor::anovaBF, rscaleFixed = %s); n = %d participants with every measure.", opt(o, "rscale", "medium"), n)))),
+    plots = list(), n = n)
+}
+STATS_MORE_RUN$banovaRM <- run_banova_rm
+
+# ---- Necessary Condition Analysis on any variables (NCA package; Dul, 2016, 2020) ------------------------------------
+# The same engine as the PLS-SEM NCA tab (nca_block), on observed variables: every ceiling of the NCA package, the four
+# corners, an optional theoretical scope, the permutation test (Dul et al., 2020), bottleneck tables, outlier analysis
+# (Dul, 2021), scatter plots with the ceilings and an optional power analysis (nca_power). Usable next to QCA: the same
+# conditions and outcome, uncalibrated (Dul, 2016; Vis & Dul, 2018).
+nca_size <- function(d) if (is.null(d) || is.na(d)) "" else if (d < 0.1) "Small" else if (d < 0.3) "Medium" else if (d < 0.5) "Large" else "Very large"
+NCA_CEILING_LABEL <- c(ce_fdh = "CE-FDH", cr_fdh = "CR-FDH", c_lp = "C-LP", ce_vrs = "CE-VRS", cr_vrs = "CR-VRS", cols = "COLS", qr = "QR", ols = "OLS (reference)")
+
+run_nca_stats <- function(d, o) {
+  conds <- unlist(opt(o, "conditions", character(0))); y <- opt(o, "outcome")
+  if (!length(conds) || is.null(y)) api_error(422, "nca_vars", "Add at least one condition and the outcome.")
+  dat <- as.data.frame(lapply(d[, c(conds, y), drop = FALSE], as.numeric), row.names = rownames(d)); dat <- dat[stats::complete.cases(dat), , drop = FALSE]
+  if (nrow(dat) < 3) api_error(422, "nca_cases", "NCA needs at least three complete cases.")
+  ces <- intersect(unlist(opt(o, "ceilings", list("ce_fdh", "cr_fdh"))), NCA_CEILINGS); if (!length(ces)) ces <- c("ce_fdh", "cr_fdh")
+  nc <- list(ceilings = ces, testRep = as.integer(num_opt(o, "testRep", 1000, 0, 20000)), steps = as.integer(num_opt(o, "steps", 10, 2, 20)),
+             corner = as.integer(num_opt(o, "corner", 1, 1, 4)), outliers = isTRUE(opt(o, "outliers", FALSE)))
+  if (!is.null(o$scopeMin) && !is.null(o$scopeMax) && o$scopeMax > o$scopeMin) { nc$scopeMin <- o$scopeMin; nc$scopeMax <- o$scopeMax }
+  set.seed(as.integer(num_opt(o, "seed", 2026)))
+  b <- nca_block(dat, conds, y, nc)
+  rows <- lapply(b$rows, function(r) list(condition = r$condition, ceiling = NCA_CEILING_LABEL[[r$ceiling]], d = r$effectSize, size = nca_size(r$effectSize),
+                                         acc = r$cAccuracy, fit = r$fit, p = r$p, pacc = r$pAccuracy))
+  corner_txt <- c("upper left: a high level of the condition is necessary for a high outcome", "upper right: a low level of the condition is necessary for a high outcome",
+                  "lower left: a high level of the condition is necessary for a low outcome", "lower right: a low level of the condition is necessary for a low outcome")[nc$corner]
+  tables <- list(list(id = "nca_effects", title = sprintf("Necessary Condition Analysis: %s", y),
+    columns = list(stats_col("condition", "Condition", "text", combineBelow = TRUE), stats_col("ceiling", "Ceiling", "text"), stats_col("d", "Effect size d"), stats_col("size", "Size", "text"),
+                   stats_col("acc", "c-accuracy %"), stats_col("fit", "Fit %"), stats_col("p", "p", pvalue = TRUE), stats_col("pacc", "p accuracy")),
+    rows = rows,
+    notes = list(sprintf("N = %d complete cases. Corner: %s. Scope: %s.", nrow(dat), corner_txt, if (!is.null(nc$scopeMin)) sprintf("theoretical, %g to %g", nc$scopeMin, nc$scopeMax) else "observed minimum and maximum"),
+                 sprintf("Permutation test with %d resamples (Dul et al., 2020); a condition is necessary 'in degree' when d is at least 0.10 and p < .05. Size (Dul, 2016): below 0.1 small, 0.1 to 0.3 medium, 0.3 to 0.5 large, 0.5 or more very large.", nc$testRep),
+                 "Report (Dul et al., 2023): the theoretical necessity hypothesis, the ceiling technique and why, the scope, the effect size with p value, the bottleneck table, and the outlier check.")))
+  for (bt in b$bottlenecks[1]) if (length(bt$rows)) tables[[length(tables) + 1]] <- list(id = "nca_bottleneck", title = sprintf("Bottleneck Table (%s; outcome and condition levels as observed values)", NCA_CEILING_LABEL[[bt$ceiling]]),
+    columns = lapply(seq_along(bt$columns), function(j) stats_col(paste0("c", j), bt$columns[[j]], "text")),
+    rows = lapply(bt$rows, function(r) stats::setNames(lapply(r, function(v) v %||% "NN"), paste0("c", seq_along(r)))),
+    notes = list("For each outcome level (first column), the minimum level of each condition that is necessary; NN = not necessary."))
+  if (length(b$outliers)) tables[[length(tables) + 1]] <- list(id = "nca_outliers", title = "Potential Outliers (Effect of Removing Each Case)",
+    columns = list(stats_col("condition", "Condition", "text", combineBelow = TRUE), stats_col("case", "Case (row)", "text"), stats_col("effectOriginal", "d (all cases)"), stats_col("effectNew", "d without the case"),
+                   stats_col("difAbs", "Change"), stats_col("difRel", "Change %"), stats_col("ceil", "Ceiling outlier", "text"), stats_col("scope", "Scope outlier", "text")),
+    rows = unlist(lapply(b$outliers, function(x) lapply(x$rows, function(r) list(condition = x$condition, case = r$case, effectOriginal = r$effectOriginal, effectNew = r$effectNew, difAbs = r$difAbs, difRel = r$difRel,
+                                                                              ceil = if (isTRUE(r$ceiling)) "Yes" else "", scope = if (isTRUE(r$scope)) "Yes" else ""))), recursive = FALSE),
+    notes = list("Cases whose removal changes the effect size the most (NCA::nca_outliers; Dul, 2021). Remove a case only for a substantive reason (e.g. a data error), and report it."))
+  if (isTRUE(opt(o, "power", FALSE))) {
+    pe <- num_opt(o, "powerEffect", 0.1, 0.01, 0.9); reps <- as.integer(num_opt(o, "powerRep", 100, 10, 1000))
+    pw <- NULL; utils::capture.output(pw <- NCA::nca_power(n = nrow(dat), effect = pe, ceiling = if (ces[1] %in% c("ce_fdh", "cr_fdh")) ces[1] else "ce_fdh", rep = reps, test.rep = 200))
+    tables[[length(tables) + 1]] <- list(id = "nca_power", title = "Power of the NCA Permutation Test",
+      columns = list(stats_col("n", "N", "integer"), stats_col("es", "Effect size d"), stats_col("ceiling", "Ceiling", "text"), stats_col("power", "Power")),
+      rows = lapply(seq_len(nrow(pw)), function(i) list(n = pw$n[i], es = pw$ES[i], ceiling = NCA_CEILING_LABEL[[as.character(pw$ceiling[i])]], power = pw$power[i])),
+      notes = list(sprintf("Share of %d simulated samples of this size (uniform data, true effect size d = %g) in which the permutation test (200 resamples) is significant at .05 (NCA::nca_power).", reps, pe)))
+  }
+  plots <- lapply(b$plots, function(pl) {
+    cn <- pl$condition; x <- unlist(pl$x); yy <- unlist(pl$y); pr <- NULL
+    stats_png(function() {
+      graphics::plot(x, yy, pch = 16, col = grDevices::adjustcolor("#1d4f86", 0.6), xlab = cn, ylab = y, main = "")
+      cols <- c(ce_fdh = "#b91c1c", cr_fdh = "#c2410c", c_lp = "#7c3aed", ce_vrs = "#0e7490", cr_vrs = "#15803d", cols = "#be185d", qr = "#a16207", ols = "#64748b")
+      pk <- pl$ceFdhPeers
+      if ("ce_fdh" %in% ces && length(pk)) { m <- do.call(rbind, lapply(pk, unlist)); m <- m[order(m[, 1]), , drop = FALSE]; graphics::lines(m[, 1], m[, 2], type = if (nc$corner %in% c(1, 3)) "s" else "S", col = cols[["ce_fdh"]], lwd = 2) }
+      leg <- character(0); lc <- character(0)
+      for (ce in setdiff(ces, "ce_fdh")) {
+        sl <- tryCatch({ o2 <- NULL; utils::capture.output(o2 <- suppressWarnings(NCA::nca_analysis(dat, cn, y, ceilings = ce, corner = if (nc$corner == 1L) NULL else nc$corner))); o2$summaries[[cn]]$params[c("Slope", "Intercept"), ce] }, error = function(e) c(NA, NA))
+        if (all(is.finite(sl))) { graphics::abline(sl[2], sl[1], col = cols[[ce]], lwd = 2, lty = if (ce == "ols") 3 else 1); leg <- c(leg, NCA_CEILING_LABEL[[ce]]); lc <- c(lc, cols[[ce]]) }
+      }
+      if ("ce_fdh" %in% ces) { leg <- c("CE-FDH", leg); lc <- c(cols[["ce_fdh"]], lc) }
+      if (length(leg)) graphics::legend("bottomright", leg, col = lc, lwd = 2, bty = "n", cex = 0.85)
+    }, title = sprintf("%s and %s", cn, y), alt = sprintf("Scatter plot of %s against %s with the NCA ceiling lines", y, cn), h = 4.2)
+  })
+  list(tables = tables, plots = Filter(Negate(is.null), plots), n = nrow(dat))
+}
+STATS_MORE_RUN$nca <- run_nca_stats
+
+# ==== Survey designs and causal effects (Stata-style): svy, DiD, propensity-score matching, IPW ==========================
+
+#' 0/1 coding of a treatment variable: numeric 0/1, logical, or a two-level variable (second level = treated).
+treat01 <- function(x, name) {
+  if (is.logical(x)) return(as.integer(x))
+  if (is.numeric(x) && all(stats::na.omit(x) %in% c(0, 1))) return(as.integer(x))
+  lv <- sort(unique(stats::na.omit(as.character(x))))
+  if (length(lv) != 2) api_error(422, "treat_levels", sprintf("'%s' must have exactly two values (0 = control, 1 = treated).", name))
+  as.integer(as.character(x) == lv[2])
+}
+
+causal_frame <- function(d, cols, factors = character(0)) {
+  dd <- data.frame(row.names = seq_len(nrow(d)))
+  for (v in cols) dd[[v]] <- if (v %in% factors) factor(d[[v]]) else d[[v]]
+  dd[stats::complete.cases(dd), , drop = FALSE]
+}
+cq <- function(x) sprintf("`%s`", x)
+
+#' Standardised mean differences (treated - control) / pooled SD, optionally weighted (Austin, 2011).
+smd_rows <- function(X, tr, w = NULL) {
+  w <- w %||% rep(1, length(tr))
+  lapply(colnames(X), function(v) {
+    x <- X[, v]
+    m1 <- stats::weighted.mean(x[tr == 1], w[tr == 1]); m0 <- stats::weighted.mean(x[tr == 0], w[tr == 0])
+    s <- sqrt((stats::var(x[tr == 1]) + stats::var(x[tr == 0])) / 2)   # unweighted pooled SD, as cobalt's default
+    list(m1 = m1, m0 = m0, smd = if (s > 0) (m1 - m0) / s else NA_real_)
+  })
+}
+smd_matrix <- function(dd, covs, factors) {
+  X <- stats::model.matrix(stats::as.formula(paste("~", paste(cq(c(covs, factors)), collapse = " + "))), dd)[, -1, drop = FALSE]
+  colnames(X) <- gsub("`", "", colnames(X)); X
+}
+love_plot <- function(names, before, after, title) stats_png(function() {
+  k <- length(names); o <- order(abs(before))
+  graphics::plot(NA, xlim = range(c(0, abs(before), abs(after), 0.25), na.rm = TRUE), ylim = c(0.5, k + 0.5), yaxt = "n", xlab = "Absolute standardised mean difference", ylab = "")
+  graphics::axis(2, at = seq_len(k), labels = names[o], las = 1, cex.axis = 0.75)
+  graphics::abline(v = 0.1, lty = 2, col = "#94a3b8")
+  graphics::points(abs(before[o]), seq_len(k), pch = 1, col = "#b91c1c", cex = 1.2)
+  graphics::points(abs(after[o]), seq_len(k), pch = 16, col = "#1d4f86", cex = 1.2)
+  graphics::legend("bottomright", c("Before", "After"), pch = c(1, 16), col = c("#b91c1c", "#1d4f86"), bty = "n")
+}, title = title, alt = "Love plot of the covariate balance before and after adjustment", w = 7, h = max(3.2, 0.32 * length(names) + 1.6))
+balance_table <- function(names, b, a, label_after) list(id = "balance", title = "Covariate Balance",
+  columns = list(stats_col("var", "Covariate", "text"), stats_col("m1b", "Treated", superTitle = "Before"), stats_col("m0b", "Control", superTitle = "Before"), stats_col("smdb", "SMD", superTitle = "Before"),
+                 stats_col("m1a", "Treated", superTitle = label_after), stats_col("m0a", "Control", superTitle = label_after), stats_col("smda", "SMD", superTitle = label_after)),
+  rows = lapply(seq_along(names), function(i) list(var = names[i], m1b = b[[i]]$m1, m0b = b[[i]]$m0, smdb = b[[i]]$smd, m1a = a[[i]]$m1, m0a = a[[i]]$m0, smda = a[[i]]$smd)),
+  notes = list(sprintf("SMD: standardised mean difference (treated minus control, divided by the pooled SD before adjustment). |SMD| < 0.1 is usually taken as balance (Austin, 2011); %d of %d covariates are balanced after adjustment.",
+                       sum(vapply(a, function(x) is.finite(x$smd) && abs(x$smd) < 0.1, TRUE)), length(a))))
+
+# ---- Survey-weighted analysis (survey package; Lumley, 2010) ----------------------------------------------------------
+run_svy <- function(d, o) {
+  y <- opt(o, "dep"); covs <- unlist(opt(o, "covs", list())); facs <- unlist(opt(o, "factors", list()))
+  w <- opt(o, "weights"); st <- opt(o, "strata"); cl <- opt(o, "cluster"); fam <- opt(o, "family", "gaussian")
+  if (is.null(y) || is.null(w)) api_error(422, "svy_vars", "Add the dependent variable and the sampling weight.")
+  dd <- causal_frame(d, unique(c(y, covs, facs, w, st, cl)), facs)
+  if (any(dd[[w]] <= 0)) api_error(422, "svy_weights", "Sampling weights must be positive.")
+  if (fam == "binomial") dd[[y]] <- treat01(dd[[y]], y)
+  des <- survey::svydesign(ids = if (is.null(cl)) ~1 else stats::as.formula(paste("~", cq(cl))), strata = if (is.null(st)) NULL else stats::as.formula(paste("~", cq(st))),
+                           weights = stats::as.formula(paste("~", cq(w))), data = dd, nest = TRUE)
+  mn <- survey::svymean(stats::as.formula(paste("~", cq(y))), des, deff = TRUE)
+  ci <- stats::confint(mn)
+  tables <- list(list(id = "svy_mean", title = "Survey-Weighted Mean", columns = list(stats_col("var", "Variable", "text"), stats_col("mean", "Mean"), stats_col("se", "SE (design)"),
+      stats_col("lower", "Lower", superTitle = "95% CI"), stats_col("upper", "Upper", superTitle = "95% CI"), stats_col("deff", "Design effect")),
+    rows = list(list(var = y, mean = unname(stats::coef(mn)), se = unname(survey::SE(mn)), lower = ci[1, 1], upper = ci[1, 2], deff = unname(survey::deff(mn)))),
+    notes = list(sprintf("Design: weights %s%s%s (survey::svydesign). The design effect compares the design variance with simple random sampling of the same size; above 1 the design loses precision.",
+                         w, if (is.null(st)) "" else paste0(", strata ", st), if (is.null(cl)) ", no clustering" else paste0(", clusters (PSU) ", cl)))))
+  if (length(c(covs, facs))) {
+    fit <- survey::svyglm(stats::as.formula(paste(cq(y), "~", paste(cq(c(covs, facs)), collapse = " + "))), design = des, family = if (fam == "binomial") stats::quasibinomial() else stats::gaussian())
+    cf <- summary(fit)$coefficients; crit <- stats::qt(0.975, fit$df.residual)
+    tables[[2]] <- list(id = "svy_coef", title = sprintf("Survey-Weighted %s Regression", if (fam == "binomial") "Logistic" else "Linear"), columns = coef_cols("t", 95),
+      rows = coef_rows(cf[, 1], cf[, 2], cf[, 3], cf[, 4], cf[, 1] - crit * cf[, 2], cf[, 1] + crit * cf[, 2], rownames(cf)),
+      notes = list(sprintf("survey::svyglm with design-based (linearisation) standard errors; %s. Degrees of freedom: %d (number of PSUs minus strata).",
+                           if (fam == "binomial") "quasi-binomial family, coefficients are log-odds" else "Gaussian family", as.integer(fit$df.residual))))
+  }
+  list(tables = tables, plots = list(), n = nrow(dd))
+}
+
+# ---- Difference-in-differences ----------------------------------------------------------------------------------------
+run_did <- function(d, o) {
+  y <- opt(o, "dep"); tr <- opt(o, "treat"); po <- opt(o, "post"); covs <- unlist(opt(o, "covs", list())); facs <- unlist(opt(o, "factors", list())); cl <- opt(o, "cluster")
+  if (is.null(y) || is.null(tr) || is.null(po)) api_error(422, "did_vars", "Add the outcome, the treatment group (0/1) and the period (0 = before, 1 = after).")
+  dd <- causal_frame(d, unique(c(y, tr, po, covs, facs, cl)), facs)
+  dd$.treat <- treat01(dd[[tr]], tr); dd$.post <- treat01(dd[[po]], po)
+  if (length(unique(paste(dd$.treat, dd$.post))) < 4) api_error(422, "did_cells", "Every combination of group and period needs cases (treated/control × before/after).")
+  form <- stats::as.formula(paste(cq(y), "~ .treat * .post", if (length(c(covs, facs))) paste("+", paste(cq(c(covs, facs)), collapse = " + ")) else ""))
+  fit <- stats::lm(form, data = dd)
+  V <- if (!is.null(cl)) sandwich::vcovCL(fit, cluster = dd[[cl]], type = "HC1") else sandwich::vcovHC(fit, type = "HC1")
+  ct <- lmtest::coeftest(fit, vcov. = V); df <- if (!is.null(cl)) length(unique(dd[[cl]])) - 1 else fit$df.residual
+  crit <- stats::qt(0.975, df); pv <- 2 * stats::pt(abs(ct[, 3]), df, lower.tail = FALSE)
+  terms <- rownames(ct); terms[terms == ".treat"] <- sprintf("%s (treated group)", tr); terms[terms == ".post"] <- sprintf("%s (after)", po); terms[terms == ".treat:.post"] <- "Treated × after (DiD effect)"
+  k <- which(rownames(ct) == ".treat:.post")
+  cell <- function(t, p) { x <- dd[[y]][dd$.treat == t & dd$.post == p]; c(mean(x), length(x)) }
+  m <- sapply(list(c(0, 0), c(0, 1), c(1, 0), c(1, 1)), function(z) cell(z[1], z[2]))
+  raw_did <- (m[1, 4] - m[1, 3]) - (m[1, 2] - m[1, 1])
+  tables <- list(
+    list(id = "did_effect", title = "Difference-in-Differences Effect", columns = list(stats_col("term", "Effect", "text"), stats_col("b", "Estimate"), stats_col("se", "SE"), stats_col("stat", "t"), stats_col("p", "p", pvalue = TRUE),
+      stats_col("lower", "Lower", superTitle = "95% CI"), stats_col("upper", "Upper", superTitle = "95% CI")),
+      rows = list(list(term = "Average treatment effect on the treated (DiD)", b = ct[k, 1], se = ct[k, 2], stat = ct[k, 3], p = pv[k], lower = ct[k, 1] - crit * ct[k, 2], upper = ct[k, 1] + crit * ct[k, 2])),
+      notes = list(sprintf("The change in the treated group minus the change in the control group (interaction of group and period in a linear model). Standard errors: %s. The estimate is causal only under parallel trends: without treatment, both groups would have changed alike (Angrist & Pischke, 2009).",
+                           if (is.null(cl)) "heteroskedasticity-robust (HC1)" else sprintf("cluster-robust by %s (%d clusters, HC1)", cl, length(unique(dd[[cl]])))))),
+    list(id = "did_means", title = "Group Means by Period", columns = list(stats_col("group", "Group", "text"), stats_col("before", "Before"), stats_col("after", "After"), stats_col("change", "Change"), stats_col("nb", "n before", "integer"), stats_col("na", "n after", "integer")),
+      rows = list(list(group = "Control", before = m[1, 1], after = m[1, 2], change = m[1, 2] - m[1, 1], nb = m[2, 1], na = m[2, 2]),
+                  list(group = "Treated", before = m[1, 3], after = m[1, 4], change = m[1, 4] - m[1, 3], nb = m[2, 3], na = m[2, 4]),
+                  list(group = "Difference (treated − control)", before = m[1, 3] - m[1, 1], after = m[1, 4] - m[1, 2], change = raw_did, nb = NA, na = NA)),
+      notes = list("The bottom-right cell is the unadjusted difference-in-differences; with covariates the model estimate above can differ.")),
+    list(id = "did_coef", title = "Regression Coefficients", columns = coef_cols("t", 95), rows = coef_rows(ct[, 1], ct[, 2], ct[, 3], pv, ct[, 1] - crit * ct[, 2], ct[, 1] + crit * ct[, 2], terms)))
+  plot <- stats_png(function() {
+    graphics::plot(c(0, 1), range(m[1, ]), type = "n", xaxt = "n", xlab = "Period", ylab = paste("Mean", y), xlim = c(-0.15, 1.15))
+    graphics::axis(1, at = 0:1, labels = c("Before", "After"))
+    graphics::lines(0:1, m[1, 1:2], type = "b", pch = 16, col = "#64748b", lwd = 2); graphics::lines(0:1, m[1, 3:4], type = "b", pch = 16, col = "#1d4f86", lwd = 2)
+    graphics::lines(0:1, c(m[1, 3], m[1, 3] + m[1, 2] - m[1, 1]), lty = 2, col = "#1d4f86")
+    graphics::legend("topleft", c("Control", "Treated", "Treated without treatment (parallel trend)"), col = c("#64748b", "#1d4f86", "#1d4f86"), lty = c(1, 1, 2), lwd = c(2, 2, 1), bty = "n", cex = 0.85)
+  }, title = "Group means before and after", alt = "Means of the treated and control groups before and after, with the counterfactual parallel trend")
+  list(tables = tables, plots = Filter(Negate(is.null), list(plot)), n = nrow(dd))
+}
+
+# ---- Propensity-score matching (MatchIt; Ho, Imai, King & Stuart, 2011) ---------------------------------------------
+run_psm <- function(d, o) {
+  y <- opt(o, "dep"); tr <- opt(o, "treat"); covs <- unlist(opt(o, "covs", list())); facs <- unlist(opt(o, "factors", list()))
+  if (is.null(tr) || !length(c(covs, facs))) api_error(422, "psm_vars", "Add the treatment (0/1) and at least one covariate.")
+  method <- opt(o, "method", "nearest"); ratio <- as.integer(num_opt(o, "ratio", 1, 1, 10)); cal <- num_opt(o, "caliper", 0, 0, 2); repl <- isTRUE(opt(o, "replace", FALSE))
+  dd <- causal_frame(d, unique(c(y, tr, covs, facs)), facs)
+  dd$.treat <- treat01(dd[[tr]], tr)
+  if (min(table(dd$.treat)) < 5) api_error(422, "psm_small", "Both groups need at least five cases.")
+  form <- stats::as.formula(paste(".treat ~", paste(cq(c(covs, facs)), collapse = " + ")))
+  set.seed(as.integer(num_opt(o, "seed", 2026, 1)))
+  args <- list(form, data = dd, method = method, distance = "glm", estimand = "ATT")
+  if (method == "nearest") { args$ratio <- ratio; args$replace <- repl; if (cal > 0) args$caliper <- cal }
+  m <- do.call(MatchIt::matchit, args)
+  md <- MatchIt::match.data(m, drop.unmatched = TRUE)
+  X <- smd_matrix(dd, covs, facs); Xm <- smd_matrix(md, covs, facs)
+  b <- smd_rows(X, dd$.treat)
+  a <- lapply(seq_len(ncol(X)), function(j) { x <- Xm[, j]; t <- md$.treat; w <- md$weights
+    s <- sqrt((stats::var(X[dd$.treat == 1, j]) + stats::var(X[dd$.treat == 0, j])) / 2)
+    m1 <- stats::weighted.mean(x[t == 1], w[t == 1]); m0 <- stats::weighted.mean(x[t == 0], w[t == 0]); list(m1 = m1, m0 = m0, smd = if (s > 0) (m1 - m0) / s else NA_real_) })
+  ns <- m$nn
+  tables <- list(
+    list(id = "psm_n", title = "Sample Sizes", columns = list(stats_col("row", "", "text"), stats_col("c", "Control"), stats_col("t", "Treated")),
+      rows = lapply(rownames(ns), function(r) list(row = r, c = ns[r, "Control"], t = ns[r, "Treated"])),
+      notes = list(sprintf("MatchIt::matchit(method = \"%s\", distance = \"glm\"%s, estimand = \"ATT\"). Propensity scores from a logistic regression of %s on the covariates.",
+                           method, if (method == "nearest") sprintf(", ratio = %d, replace = %s%s", ratio, if (repl) "TRUE" else "FALSE", if (cal > 0) sprintf(", caliper = %g SD", cal) else "") else "", tr))),
+    balance_table(colnames(X), b, a, "Matched"))
+  if (!is.null(y)) {
+    fit <- stats::lm(stats::as.formula(paste(cq(y), "~ .treat")), data = md, weights = md$weights)
+    V <- if (method == "nearest" && !repl) sandwich::vcovCL(fit, cluster = md$subclass) else sandwich::vcovHC(fit, type = "HC3")
+    ct <- lmtest::coeftest(fit, vcov. = V); crit <- stats::qnorm(0.975)
+    tables[[length(tables) + 1]] <- list(id = "psm_att", title = sprintf("Average Treatment Effect on the Treated (ATT): %s", y),
+      columns = list(stats_col("term", "Effect", "text"), stats_col("b", "Estimate"), stats_col("se", "SE"), stats_col("stat", "z"), stats_col("p", "p", pvalue = TRUE), stats_col("lower", "Lower", superTitle = "95% CI"), stats_col("upper", "Upper", superTitle = "95% CI")),
+      rows = list(list(term = "ATT (treated − matched controls)", b = ct[2, 1], se = ct[2, 2], stat = ct[2, 3], p = 2 * stats::pnorm(-abs(ct[2, 3])), lower = ct[2, 1] - crit * ct[2, 2], upper = ct[2, 1] + crit * ct[2, 2])),
+      notes = list(sprintf("Weighted regression of %s on the treatment in the matched sample; %s standard errors, as recommended in the MatchIt documentation (Greifer, 2023). Causal only if there are no unmeasured confounders.",
+                           y, if (method == "nearest" && !repl) "cluster-robust (by matched pair)" else "robust (HC3)")))
+  }
+  ps <- m$distance
+  plots <- list(love_plot(colnames(X), vapply(b, `[[`, 0, "smd"), vapply(a, `[[`, 0, "smd"), "Covariate balance (Love plot)"),
+    stats_png(function() {
+      h0 <- graphics::hist(ps[dd$.treat == 0], breaks = seq(0, 1, 0.05), plot = FALSE); h1 <- graphics::hist(ps[dd$.treat == 1], breaks = seq(0, 1, 0.05), plot = FALSE)
+      graphics::plot(h0, col = grDevices::adjustcolor("#64748b", 0.5), border = "white", main = "", xlab = "Propensity score", ylim = c(0, max(h0$counts, h1$counts)))
+      graphics::plot(h1, col = grDevices::adjustcolor("#1d4f86", 0.5), border = "white", add = TRUE)
+      graphics::legend("topright", c("Control", "Treated"), fill = grDevices::adjustcolor(c("#64748b", "#1d4f86"), 0.5), bty = "n")
+    }, title = "Propensity scores (common support)", alt = "Histograms of the propensity scores of the treated and control groups"))
+  list(tables = tables, plots = Filter(Negate(is.null), plots), n = nrow(dd))
+}
+
+# ---- Inverse probability weighting -----------------------------------------------------------------------------------
+run_ipw <- function(d, o) {
+  y <- opt(o, "dep"); tr <- opt(o, "treat"); covs <- unlist(opt(o, "covs", list())); facs <- unlist(opt(o, "factors", list()))
+  if (is.null(y) || is.null(tr) || !length(c(covs, facs))) api_error(422, "ipw_vars", "Add the outcome, the treatment (0/1) and at least one covariate.")
+  est <- opt(o, "estimand", "ATE"); stab <- isTRUE(opt(o, "stabilized", TRUE)); trim <- num_opt(o, "trim", 0, 0, 0.2)
+  dd <- causal_frame(d, unique(c(y, tr, covs, facs)), facs)
+  dd$.treat <- treat01(dd[[tr]], tr)
+  ps_fit <- stats::glm(stats::as.formula(paste(".treat ~", paste(cq(c(covs, facs)), collapse = " + "))), data = dd, family = stats::binomial())
+  ps <- stats::fitted(ps_fit)
+  if (trim > 0) ps <- pmin(pmax(ps, trim), 1 - trim)
+  t <- dd$.treat; pt <- mean(t)
+  w <- if (est == "ATT") ifelse(t == 1, 1, ps / (1 - ps)) else if (stab) ifelse(t == 1, pt / ps, (1 - pt) / (1 - ps)) else ifelse(t == 1, 1 / ps, 1 / (1 - ps))
+  X <- smd_matrix(dd, covs, facs)
+  b <- smd_rows(X, t); a <- smd_rows(X, t, w)
+  fit <- stats::lm(stats::as.formula(paste(cq(y), "~ .treat")), data = dd, weights = w)
+  ct <- lmtest::coeftest(fit, vcov. = sandwich::vcovHC(fit, type = "HC0")); crit <- stats::qnorm(0.975)
+  ess <- function(x) sum(x)^2 / sum(x^2)
+  tables <- list(
+    list(id = "ipw_effect", title = sprintf("Inverse Probability Weighting: %s of %s on %s", est, tr, y),
+      columns = list(stats_col("term", "Effect", "text"), stats_col("b", "Estimate"), stats_col("se", "SE (robust)"), stats_col("stat", "z"), stats_col("p", "p", pvalue = TRUE), stats_col("lower", "Lower", superTitle = "95% CI"), stats_col("upper", "Upper", superTitle = "95% CI")),
+      rows = list(list(term = if (est == "ATT") "Average treatment effect on the treated (ATT)" else "Average treatment effect (ATE)", b = ct[2, 1], se = ct[2, 2], stat = ct[2, 3], p = 2 * stats::pnorm(-abs(ct[2, 3])), lower = ct[2, 1] - crit * ct[2, 2], upper = ct[2, 1] + crit * ct[2, 2])),
+      notes = list(sprintf("Propensity scores from a logistic regression; %s weights%s; weighted regression with robust (sandwich) standard errors, which are conservative because the propensity scores are estimated (Austin & Stuart, 2015). Causal only if there are no unmeasured confounders and both groups overlap.",
+                           if (est == "ATT") "ATT (treated 1, controls ps/(1−ps))" else if (stab) "stabilised ATE" else "ATE", if (trim > 0) sprintf("; propensity scores trimmed to [%g, %g]", trim, 1 - trim) else ""))),
+    list(id = "ipw_weights", title = "Weights", columns = list(stats_col("group", "Group", "text"), stats_col("n", "n", "integer"), stats_col("min", "Min"), stats_col("max", "Max"), stats_col("mean", "Mean"), stats_col("ess", "Effective n")),
+      rows = lapply(c(0, 1), function(g) { x <- w[t == g]; list(group = if (g == 1) "Treated" else "Control", n = length(x), min = min(x), max = max(x), mean = mean(x), ess = ess(x)) }),
+      notes = list("Effective sample size (Kish): (Σw)² / Σw². Very large weights (or a small effective n) signal poor overlap; consider trimming.")),
+    balance_table(colnames(X), b, a, "Weighted"))
+  plots <- list(love_plot(colnames(X), vapply(b, `[[`, 0, "smd"), vapply(a, `[[`, 0, "smd"), "Covariate balance (Love plot)"))
+  list(tables = tables, plots = Filter(Negate(is.null), plots), n = nrow(dd))
+}
+
+STATS_MORE_RUN$svy <- run_svy
+STATS_MORE_RUN$did <- run_did
+STATS_MORE_RUN$psm <- run_psm
+STATS_MORE_RUN$ipw <- run_ipw

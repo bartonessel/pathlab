@@ -1,6 +1,6 @@
 # Exports: XLSX workbook (full precision) and self-contained HTML report.
 
-PATHLAB_VERSION <- "0.17.16"
+PATHLAB_VERSION <- "1.2.10"
 # Release code names, one per major version: 1.0.0 up to 2.0.0 is "Gauss"; 0.x has none (as in frontend/src/lib/version.ts).
 PATHLAB_CODENAMES <- c(`1` = "Gauss")
 PATHLAB_CODENAME <- unname(PATHLAB_CODENAMES[sub("[.].*$", "", PATHLAB_VERSION)])
@@ -115,7 +115,23 @@ result_sheets <- function(res, project_name) {
   if (!is.null(res$predict)) {
     sheets[["PLSpredict"]] <- rows_to_df(res$predict$items, c("indicator", "plsRMSE", "lmRMSE", "diffRMSE", "plsMAE", "lmMAE", "diffMAE"),
                                          c("Indicator", "PLS RMSE", "LM RMSE", "RMSE (PLS - LM)", "PLS MAE", "LM MAE", "MAE (PLS - LM)"))
+    if (length(res$predict$q2)) sheets[["Q2predict"]] <- rows_to_df(res$predict$q2, c("indicator", "q2pls", "q2lm"), c("Indicator", "Q2predict (PLS-SEM)", "Q2predict (LM)"))
+    if (length(res$predict$cvpat)) sheets[["CVPAT"]] <- rows_to_df(res$predict$cvpat, c("construct", "benchmark", "lossPls", "lossBench", "diff", "t", "df", "p"),
+                                                                  c("Construct", "Benchmark", "PLS-SEM loss", "Benchmark loss", "Difference", "t", "df", "p (one-sided)"))
   }
+  # Further PLS-SEM assessment (each present only when chosen).
+  ft <- res$measurement$fitTest
+  if (isTRUE(ft$available)) sheets[["Fit test"]] <- rbind(data.frame(Model = "Saturated", rows_to_df(ft$saturated, c("measure", "value", "hi95", "hi99", "p"), c("Measure", "Value", "HI95", "HI99", "p")), check.names = FALSE),
+                                                        data.frame(Model = "Estimated", rows_to_df(ft$estimated, c("measure", "value", "hi95", "hi99", "p"), c("Measure", "Value", "HI95", "HI99", "p")), check.names = FALSE))
+  if (length(res$measurement$cta$constructs)) sheets[["CTA-PLS"]] <- do.call(rbind, lapply(res$measurement$cta$constructs, function(k)
+    data.frame(Construct = k$construct, rows_to_df(k$rows, c("tetrad", "value", "lower", "upper", "zero"), c("Tetrad", "Value", "Lower", "Upper", "Contains 0")), Verdict = k$verdict, check.names = FALSE)))
+  if (length(res$structural$endogeneity$rows)) sheets[["Endogeneity"]] <- rows_to_df(res$structural$endogeneity$rows, c("outcome", "predictor", "normalityP", "copula", "se", "p", "note"),
+                                                                                  c("Endogenous construct", "Predictor", "Normality p (CvM)", "Copula coefficient", "Bootstrap SE", "p", "Note"))
+  if (length(res$moderation$slopes)) sheets[["Simple slopes"]] <- rows_to_df(res$moderation$slopes, c("interaction", "outcome", "level", "slope", "lower", "upper"), c("Interaction", "Outcome", "Moderator level (SD)", "Slope", "Lower", "Upper"))
+  if (length(res$moderation$moderatedMediation)) sheets[["Moderated mediation"]] <- rows_to_df(res$moderation$moderatedMediation, c("chain", "stage", "moderator", "index", "lower", "upper", "p"),
+                                                                                             c("Indirect effect", "Stage", "Moderator", "Index", "Lower", "Upper", "p"))
+  if (length(res$mga$pairs)) sheets[["MGA pairs"]] <- rows_to_df(res$mga$pairs, c("group1", "group2", "n1", "n2", "from", "to", "b1", "b2", "diff", "p", "pParam", "pWelch"),
+                                                                c("Group A", "Group B", "n A", "n B", "From", "To", "Beta A", "Beta B", "Difference", "PLS-MGA p", "Parametric p", "Welch p"))
   if (!is.null(res$ipma)) {
     sheets[["IPMA constructs"]] <- rows_to_df(res$ipma$constructs, c("construct", "importance", "performance"),
                                               c(paste("Predictor of", res$ipma$target), "Importance (unstandardised total effect)", "Performance (0-100)"))
@@ -140,6 +156,8 @@ result_sheets <- function(res, project_name) {
                                   c("From", "To", "Pooled (both groups)", paste0(l1, " (n=", g$n1, ")"), paste0(l2, " (n=", g$n2, ")"),
                                     paste0("Difference (", l1, " - ", l2, ")"), paste(l1, "bootstrap mean"), paste(l2, "bootstrap mean"),
                                     paste0("PLS-MGA p (one-sided, H1: ", l1, " > ", l2, ")")))
+    if (length(g$micom$rows)) sheets[["MICOM"]] <- rows_to_df(g$micom$rows, c("construct", "c", "c5", "pC", "compositional", "meanDiff", "meanLo", "meanHi", "meanEqual", "logVarRatio", "varLo", "varHi", "varEqual", "invariance"),
+      c("Construct", "c", "c 5% quantile", "p (c)", "Compositional invariance", "Mean difference", "Mean 2.5%", "Mean 97.5%", "Equal means", "Log variance ratio", "Var 2.5%", "Var 97.5%", "Equal variances", "Measurement invariance"))
   }
   diag <- c(paste("Warning:", unlist(res$diagnostics$warnings)), paste("Message:", unlist(res$diagnostics$messages)))
   diag <- diag[!diag %in% c("Warning:", "Message:")]
@@ -489,6 +507,38 @@ build_report_html <- function(res, project_name, ds, opts = list()) {
     a(html_table(c("Indicator", "PLS RMSE", "LM RMSE", "RMSE (PLS &minus; LM)", "PLS MAE", "LM MAE", "MAE (PLS &minus; LM)"),
                  lapply(res$predict$items, function(r) c(esc(r$indicator), fmt(r$plsRMSE), fmt(r$lmRMSE), flag(fmt(r$diffRMSE), gt(r$diffRMSE, 0)), fmt(r$plsMAE), fmt(r$lmMAE), flag(fmt(r$diffMAE), gt(r$diffMAE, 0)))),
                  NULL, num_cols = 2:7))
+    if (length(res$predict$q2)) {
+      a("<p>Q&sup2;<sub>predict</sub> (Shmueli et al., 2019) compares the PLS-SEM prediction errors with those of the training-sample mean; values above 0 indicate predictive relevance (values in red are 0 or below).</p>")
+      a(html_table(c("Indicator", "Q&sup2;predict (PLS-SEM)", "Q&sup2;predict (LM)"), lapply(res$predict$q2, function(r) c(esc(r$indicator), flag(fmt(r$q2pls), !is.null(r$q2pls) && r$q2pls <= 0), fmt(r$q2lm))), NULL, num_cols = 2:3))
+    }
+    if (length(res$predict$cvpat)) {
+      a("<p>The cross-validated predictive ability test (CVPAT; Liengaard et al., 2021; Sharma et al., 2023) compares the average squared prediction error per case of PLS-SEM with the indicator average (IA) and linear model (LM) benchmarks from the same folds. A significant one-sided t test means PLS-SEM predicts better than the benchmark.</p>")
+      a(html_table(c("Construct", "Benchmark", "PLS-SEM loss", "Benchmark loss", "Difference", "t", "p (one-sided)"),
+                   lapply(res$predict$cvpat, function(r) c(esc(r$construct), esc(r$benchmark), fmt(r$lossPls), fmt(r$lossBench), fmt(r$diff), fmt(r$t), fmt(r$p))), "CVPAT", num_cols = 3:7))
+    }
+  }
+
+  # Further assessment ----------------------------------------------------------------
+  if (isTRUE(res$measurement$fitTest$available)) {
+    ft <- res$measurement$fitTest
+    a("<h2>Bootstrap test of model fit</h2><p>Dijkstra &amp; Henseler (2015): the data were transformed to fit the model exactly and bootstrapped (", ft$nboot,
+      " samples). A value below HI95 means the discrepancy is not significant at 5% (the model fits).</p>")
+    a(html_table(c("Model", "Measure", "Value", "HI95", "HI99"), c(lapply(ft$saturated, function(r) c("Saturated", esc(r$measure), fmt(r$value), fmt(r$hi95), fmt(r$hi99))),
+                                                                 lapply(ft$estimated, function(r) c("Estimated", esc(r$measure), flag(fmt(r$value), !is.null(r$value) && !is.null(r$hi95) && r$value > r$hi95), fmt(r$hi95), fmt(r$hi99)))), NULL, num_cols = 3:5))
+  }
+  if (length(res$structural$endogeneity$rows)) {
+    a("<h2>Endogeneity (Gaussian copula)</h2><p>Park &amp; Gupta (2012); Hult et al. (2018). A significant copula term indicates endogeneity of that predictor.</p>")
+    a(html_table(c("Construct", "Predictor", "Normality p", "Copula", "p"), lapply(res$structural$endogeneity$rows, function(r) c(esc(r$outcome), esc(r$predictor), fmt(r$normalityP), fmt(r$copula), flag(fmt(r$p), !is.null(r$p) && r$p < 0.05))), NULL, num_cols = 3:5))
+  }
+  if (length(res$moderation$slopes)) {
+    a("<h2>Simple slopes</h2><p>Effect of the predictor at the moderator's mean and &plusmn;1 SD (standardised scores).</p>")
+    a(html_table(c("Interaction", "Outcome", "Moderator level", "Slope", "Lower", "Upper"), lapply(res$moderation$slopes, function(r) c(esc(r$interaction), esc(r$outcome), if (r$level == 0) "Mean" else sprintf("%+d SD", r$level), fmt(r$slope), fmt(r$lower), fmt(r$upper))), NULL, num_cols = 4:6))
+    if (length(res$moderation$moderatedMediation)) a(html_table(c("Indirect effect", "Stage", "Moderator", "Index of moderated mediation", "Lower", "Upper"),
+      lapply(res$moderation$moderatedMediation, function(r) c(esc(r$chain), esc(r$stage), esc(r$moderator), fmt(r$index), fmt(r$lower), fmt(r$upper))), "Index of moderated mediation (Hayes, 2015)", num_cols = 4:6))
+  }
+  if (length(res$measurement$cta$constructs)) {
+    a("<h2>Confirmatory tetrad analysis (CTA-PLS)</h2><p>Gudergan et al. (2008): Bonferroni-adjusted bootstrap intervals of the vanishing tetrads.</p>")
+    a(html_table(c("Construct", "Indicators", "Tetrads", "Verdict"), lapply(res$measurement$cta$constructs, function(k) c(esc(k$construct), k$indicators, k$tetrads, esc(k$verdict))), NULL, num_cols = 2:3))
   }
 
   # Advanced analyses -----------------------------------------------------------------
@@ -554,10 +604,19 @@ build_report_html <- function(res, project_name, ds, opts = list()) {
       "Each group was bootstrapped with ", g$nbootUsed, " samples (seed ", g$seed %||% "none", ") by SEMinR's <code>estimate_pls_mga()</code>. ",
       "The PLS-MGA p value (Henseler et al., 2009) is <em>one-sided</em>: it is the probability that the group 1 coefficient is not larger than the group 2 coefficient. ",
       "Values near 0 suggest group 1 &gt; group 2; values near 1 suggest group 2 &gt; group 1 (for a 5% two-sided test, look for p &lt; 0.025 or p &gt; 0.975). ",
-      "Measurement invariance (MICOM) is not assessed by SEMinR and was not tested.</p>")
+      if (length(g$micom$rows)) "Measurement invariance was assessed first with MICOM (below)." else "Measurement invariance (MICOM) was not tested.", "</p>")
     a(html_table(c("Path", esc(mga_label(g, 1)), esc(mga_label(g, 2)), "Difference", "PLS-MGA p"),
                  lapply(g$paths, function(r) c(paste0(esc(r$from), " &rarr; ", esc(r$to)), fmt(r$group1), fmt(r$group2), fmt(r$diff), fmt(r$p))),
                  "Group-specific path coefficients", num_cols = 2:5))
+    if (length(g$micom$rows)) {
+      a("<p>MICOM (Henseler, Ringle &amp; Sarstedt, 2016), ", g$micom$nPermUsed, " permutations (seed ", g$micom$seed %||% "none", "). Step 1 (configural invariance) holds by design. ",
+        "Step 2: compositional invariance holds when the correlation c of the scores from the two groups' weights is not below its 5% permutation quantile. ",
+        "Step 3: equal means and variances hold when the difference lies in the 95% permutation interval. Partial invariance (step 2) allows comparing path coefficients; full invariance also allows pooling the groups.</p>")
+      a(html_table(c("Construct", "c", "5% quantile", "Mean difference", "95% interval", "Log variance ratio", "95% interval", "Invariance"),
+                   lapply(g$micom$rows, function(r) c(esc(r$construct), flag(fmt(r$c), !isTRUE(r$compositional)), fmt(r$c5), flag(fmt(r$meanDiff), !isTRUE(r$meanEqual)), sprintf("[%s, %s]", fmt(r$meanLo), fmt(r$meanHi)),
+                                                      flag(fmt(r$logVarRatio), !isTRUE(r$varEqual)), sprintf("[%s, %s]", fmt(r$varLo), fmt(r$varHi)), esc(r$invariance))),
+                   "MICOM", num_cols = 2:7))
+    }
   }
 
   # 8 Reproducibility ----------------------------------------------------------

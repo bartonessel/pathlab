@@ -104,7 +104,11 @@ normalize_gg <- function(raw) {
                 zLabel = { zl <- as.character(t3$zLabel %||% "")[1]; if (nzchar(zl)) substr(zl, 1, 200) else NULL },
                 opacity = min(max(suppressWarnings(as.numeric(t3$opacity %||% 0.75)), 0.1, na.rm = TRUE), 1),
                 aspect = if ((t3$aspect %||% "cube") %in% c("cube", "data", "auto")) t3$aspect %||% "cube" else "cube")
-  list(aes = aes_of(raw$aes), layers = layers, facet = facet, labels = labs, theme = theme, coord = list(flip = isTRUE(raw$coord$flip)), size = size, three = three)
+  # Direction of the axis labels (tick labels at 0, 45 or 90 degrees) and of the Y-axis title (vertical or horizontal).
+  ax <- raw$axes %||% list()
+  ang <- function(v) { v <- suppressWarnings(as.integer(v))[1]; if (is.na(v) || !v %in% c(0L, 45L, 90L)) 0L else v }
+  axes <- list(x = ang(ax$x), y = ang(ax$y), z = ang(ax$z), yTitle = if (identical(ax$yTitle, "horizontal")) "horizontal" else "vertical")
+  list(aes = aes_of(raw$aes), layers = layers, facet = facet, labels = labs, theme = theme, coord = list(flip = isTRUE(raw$coord$flip)), size = size, three = three, axes = axes)
 }
 
 gg_vars <- function(sp) unique(c(if (isTRUE(sp$three$enabled)) sp$three$z, unlist(sp$aes), unlist(lapply(sp$layers, function(l) unlist(l$aes))), sp$facet$wrap, Filter(nzchar, c(sp$facet$rows, sp$facet$cols))))
@@ -114,7 +118,8 @@ gg_name <- function(v) { if (grepl("`", v, fixed = TRUE)) api_error(400, "gg_nam
 #' ggplot2 code of a specification. `discrete`: variables to turn into factors (nominal / ordinal measures).
 gg_code <- function(sp, discrete = character(0), ordered = character(0), missing_code = NULL, data_line = TRUE) {
   dq <- function(x) if (is.integer(x)) as.character(x) else paste(deparse(x, width.cutoff = 500L), collapse = "")
-  aes_txt <- function(a) if (length(a)) paste0("aes(", paste(sprintf("%s = %s", names(a), vapply(unlist(a), gg_name, "")), collapse = ", "), ")") else ""
+  # A mapping is a variable name, or (AsIs) an expression written as it is.
+  aes_txt <- function(a) if (length(a)) paste0("aes(", paste(sprintf("%s = %s", names(a), vapply(a, function(v) if (inherits(v, "AsIs")) as.character(v) else gg_name(v), "")), collapse = ", "), ")") else ""
   L <- c("library(ggplot2)")
   if (data_line) L <- c(L, "# data <- read.csv(\"your_data.csv\")   # the same dataset as in the app")
   if (!is.null(missing_code)) L <- c(L, sprintf("data[data == %s] <- NA   # project missing-value code", dq(missing_code)))
@@ -122,10 +127,29 @@ gg_code <- function(sp, discrete = character(0), ordered = character(0), missing
   parts <- sprintf("ggplot(data%s)", if (length(sp$aes)) paste0(", ", aes_txt(sp$aes)) else "")
   for (l in sp$layers) {
     def <- GG_GEOMS[[l$geom]]
-    args <- c(if (length(l$aes)) aes_txt(l$aes),
+    # A layer inherits every plot-wide mapping, and a position its geom does not take is an error in ggplot2 (a
+    # histogram, bar or density counts one variable: "stat_bin() must only have an x or y aesthetic" when the plot
+    # maps both x and y). Such a layer gets the plot-wide mappings it does take written into its own aes() and
+    # inherits none. Reference lines (no aesthetics) never inherit, so they are left alone.
+    own <- l$aes; inherit <- isTRUE(l$inherit)
+    if (inherit && length(def$aes) && length(setdiff(intersect(names(sp$aes), c("x", "y", "ymin", "ymax", "sample")), c(def$aes, names(l$aes))))) {
+      keep <- setdiff(intersect(names(sp$aes), def$aes), names(l$aes))
+      own <- c(sp$aes[keep], l$aes); inherit <- FALSE
+    }
+    # A mapped group decides the groups on its own, so a discrete line type, shape, colour or fill that varies within a
+    # group is dropped by a statistics layer ("The following aesthetics were dropped during statistical transformation:
+    # linetype"). The layer then groups by the group variable and those variables together.
+    eff <- c(if (inherit) sp$aes[setdiff(names(sp$aes), names(own))], own)
+    if (!is.null(eff$group)) {
+      split <- eff[intersect(names(eff), c("linetype", "shape", "colour", "fill", "alpha", "size"))]
+      split <- split[names(split) %in% c("linetype", "shape") | unlist(split) %in% discrete]
+      extra <- setdiff(unique(unlist(split)), eff$group)
+      if (length(extra)) own$group <- I(sprintf("interaction(%s)", paste(vapply(c(eff$group, extra), gg_name, ""), collapse = ", ")))
+    }
+    args <- c(if (length(own)) aes_txt(own),
               vapply(names(l$params), function(k) sprintf("%s = %s", if (make.names(k) == k) k else paste0("`", k, "`"), dq(l$params[[k]])), ""),
               if (nzchar(l$position)) sprintf("position = %s", dq(l$position)),
-              if (!isTRUE(l$inherit)) "inherit.aes = FALSE",
+              if (!inherit) "inherit.aes = FALSE",
               if (l$geom == "smooth" && is.null(l$params$method)) "method = \"lm\"",
               if (l$geom == "smooth") if (identical(l$params$method, "gam")) "formula = y ~ s(x, bs = \"cs\")" else "formula = y ~ x",
               if (l$geom == "summary" && is.null(l$params$fun.data)) "fun.data = \"mean_se\"")
@@ -139,11 +163,70 @@ gg_code <- function(sp, discrete = character(0), ordered = character(0), missing
   if (length(sp$labels)) parts <- c(parts, sprintf("labs(%s)", paste(sprintf("%s = %s", names(sp$labels), vapply(sp$labels, dq, "")), collapse = ", ")))
   t <- sp$theme
   parts <- c(parts, sprintf("%s(base_size = %s, base_family = %s)", GG_THEMES[[t$base]], dq(t$size), dq(t$family)))
+  ax <- sp$axes %||% list(x = 0L, y = 0L, yTitle = "vertical")
   th <- c(if (t$legend != "right") sprintf("legend.position = %s", dq(t$legend)), if (isTRUE(t$centreTitle)) "plot.title = element_text(hjust = 0.5)",
+          switch(as.character(ax$x %||% 0L), "45" = "axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)", "90" = "axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)", NULL),
+          switch(as.character(ax$y %||% 0L), "45" = "axis.text.y = element_text(angle = 45, hjust = 1, vjust = 0.5)", "90" = "axis.text.y = element_text(angle = 90, hjust = 0.5, vjust = 0.5)", NULL),
+          if (identical(ax$yTitle, "horizontal")) "axis.title.y = element_text(angle = 0, vjust = 0.5)",
           if (isTRUE(t$noGrid) || t$base == "apa") "panel.grid = element_blank()",
           if (t$base == "apa") c("axis.line = element_line(colour = \"black\")", "legend.key = element_blank()", "strip.background = element_blank()"))
   if (length(th)) parts <- c(parts, sprintf("theme(%s)", paste(th, collapse = ", ")))
+  # Continuous colour / fill: a slim colour bar with the title above it, muted labels and short outside ticks (as the
+  # colour bar of the 3D view) instead of ggplot2's wide bar with white ticks.
+  cb <- gg_colourbar_aes(sp, discrete)
+  if (length(cb) && t$legend != "none") {
+    horiz <- t$legend %in% c("top", "bottom")
+    g <- sprintf("guide_colourbar(theme = theme(legend.title.position = \"top\", legend.key.width = unit(%s, \"lines\"), legend.key.height = unit(%s, \"lines\"), legend.title = element_text(colour = \"#334155\", size = rel(0.9)), legend.text = element_text(colour = \"#64748B\", size = rel(0.8)), legend.ticks = element_line(colour = \"#94A3B8\", linewidth = 0.4), legend.ticks.length = unit(c(-0.25, 0), \"lines\")))",
+                 if (horiz) "8" else "0.55", if (horiz) "0.55" else "7")
+    parts <- c(parts, sprintf("guides(%s)", paste(sprintf("%s = %s", cb, g), collapse = ", ")))
+  }
   c(L, "", paste0("p <- ", paste(parts, collapse = " +\n  ")), "p")
+}
+
+#' Colour and fill aesthetics mapped to a continuous variable anywhere in the plot (they get a colour bar).
+gg_colourbar_aes <- function(sp, discrete) {
+  maps <- c(list(sp$aes), lapply(sp$layers, function(l) l$aes))
+  Filter(function(a) any(vapply(maps, function(m) { v <- m[[a]]; !is.null(v) && !inherits(v, "AsIs") && !(as.character(v) %in% discrete) }, TRUE)), c("colour", "fill"))
+}
+
+#' Settings that make a plot misleading without an error (also shown in the builder, ggLayerNotes in ggplot.ts): a fixed
+#' setting replaces the mapping of the same aesthetic, whose legend then matches nothing; a fill on points whose shape
+#' takes none (only shapes 21-25 have a fill).
+gg_layer_notes <- function(sp) {
+  nm <- c(colour = "colour", fill = "fill", shape = "shape", size = "size", alpha = "transparency", linetype = "line type")
+  out <- character(0)
+  for (i in seq_along(sp$layers)) {
+    l <- sp$layers[[i]]; def <- GG_GEOMS[[l$geom]]
+    eff <- c(l$aes, if (isTRUE(l$inherit)) sp$aes[setdiff(intersect(names(sp$aes), def$aes), names(l$aes))])
+    tag <- sprintf("Layer %d \u00b7 %s", i, def$label)
+    for (k in intersect(names(l$params), intersect(names(nm), names(eff))))
+      out <- c(out, sprintf("%s: a fixed %s is set, so the %s mapping (%s) has no effect. Clear one of them.", tag, nm[[k]], nm[[k]], eff[[k]]))
+    if (l$geom %in% c("point", "jitter") && (!is.null(eff$fill) || !is.null(l$params$fill)) && !isTRUE(l$params$shape %in% 21:25))
+      out <- c(out, sprintf("%s: this shape has no fill, so Fill has no effect. Choose a shape \u201cwith fill\u201d or clear Fill.", tag))
+  }
+  out
+}
+
+#' ggplot2's own warnings in plain words: the hints it adds (lines starting with "i") are dropped and the common ones are
+#' rewritten; each note starts with what it is about ("Plot: ...").
+gg_tidy_warnings <- function(w) {
+  w <- trimws(sub("\\s*(\u2139|\\bi\\s+This can happen|\\bi\\s+Did you).*$", "", w, perl = TRUE))
+  vapply(w, function(x) {
+    m <- regmatches(x, regexec("aesthetics were dropped during statistical transformation: (.+?)\\.?$", x, perl = TRUE))[[1]]
+    if (length(m)) return(sprintf("Plot: %s cannot vary within a summary layer (such as a density or smoother), so %s not applied there. To draw one summary per category, map a categorical variable or set Group.",
+                                  sub("^(.)", "\\U\\1", m[2], perl = TRUE), if (grepl(" and |, ", m[2])) "they are" else "it is"))
+    m <- regmatches(x, regexec("^Computation failed in `stat_([a-z0-9_]+)\\(\\)`", x, perl = TRUE))[[1]]
+    if (length(m)) {
+      what <- c(density2d = "2D density", density_2d = "2D density", density_2d_filled = "2D density", density = "density", bin = "histogram",
+                count = "bar", smooth = "smoother", summary = "summary", boxplot = "box plot", ydensity = "violin", qq = "Q-Q", qq_line = "Q-Q line")[m[2]]
+      what <- if (is.na(what)) "one" else what
+      why <- if (grepl("bandwidth|must contain numbers larger than 0", x)) " It needs numeric X and Y with enough different values (ordinal or categorical variables with few levels do not work)." else ""
+      return(sprintf("Plot: the %s layer could not be computed and is left out.%s", what, why))
+    }
+    m <- regmatches(x, regexec("^Removed (\\d+) rows? containing (missing values|non-finite|missing values or values outside the scale range)", x, perl = TRUE))[[1]]
+    if (length(m)) return(sprintf("Plot: %s row%s with missing or out-of-range values %s left out.", m[2], if (m[2] == "1") "" else "s", if (m[2] == "1") "was" else "were"))
+    if (grepl("^(Layer \\d+|3D view|Plot)\\b", x)) x else paste0("Plot: ", x)
+  }, "", USE.NAMES = FALSE)
 }
 
 #' Prepare the data (missing code, factors for discrete mappings) and evaluate the generated code.
@@ -164,7 +247,7 @@ run_ggplot <- function(df, sp, measures, missing_code = NULL, dpi = 110, format 
   data <- d
   for (v in discrete) data[[v]] <- if (!is.null(levels[[v]])) labelled_factor(data[[v]], levels[[v]], ordered = v %in% ordered) else factor(data[[v]], ordered = v %in% ordered)
   env <- new.env(parent = asNamespace("ggplot2")); env$data <- data
-  warns <- character(0)
+  warns <- gg_layer_notes(sp)
   p <- withCallingHandlers(tryCatch(eval(parse(text = paste(code[-(1:which(code == "")[1])], collapse = "\n")), envir = env),
                                     error = function(e) api_error(422, "gg_failed", paste("The plot could not be built:", sanitize_message(conditionMessage(e))))),
                            warning = function(w) { warns <<- c(warns, sanitize_message(conditionMessage(w))); invokeRestart("muffleWarning") },
@@ -172,7 +255,7 @@ run_ggplot <- function(df, sp, measures, missing_code = NULL, dpi = 110, format 
   path <- gg_render(p, sp$size$width, sp$size$height, dpi, format, function(w) warns <<- c(warns, w))
   fig3d <- if (isTRUE(sp$three$enabled)) gg3d_figure(data, sp, function(w) warns <<- c(warns, w)) else NULL
   if (!is.null(fig3d)) code <- c(code, gg3d_code(sp))
-  list(path = path, code = paste(code, collapse = "\n"), warnings = unique(warns), discrete = discrete, fig3d = fig3d)
+  list(path = path, code = paste(code, collapse = "\n"), warnings = unique(gg_tidy_warnings(warns)), discrete = discrete, fig3d = fig3d)
 }
 
 gg_render <- function(p, width, height, dpi, format, warn) {

@@ -5,7 +5,7 @@
 # calibrated sets exist only inside the analysis (they can be saved as derived variables on request). The optional
 # 0.001 shift of fuzzy memberships of exactly 0.5 (Fiss, 2011) is applied to the calibrated conditions and reported.
 
-QCA_METHODS <- c(fuzzy = "Fuzzy (direct method)", crisp = "Crisp / multi-value thresholds", none = "Already calibrated (0-1)")
+QCA_METHODS <- c(fuzzy = "Fuzzy (direct method)", indirect = "Fuzzy (indirect method)", crisp = "Crisp / multi-value thresholds", none = "Already calibrated (0-1)")
 
 normalize_qca <- function(raw) {
   raw <- raw %||% list()
@@ -24,7 +24,9 @@ normalize_qca <- function(raw) {
     anchors <- as.character(c0$anchors %||% "percentile")[1]
     if (!anchors %in% c("percentile", "value")) anchors <- "percentile"
     th <- suppressWarnings(as.numeric(unlist(c0$thresholds %||% list())))
-    if (!length(th) || anyNA(th)) th <- if (method == "fuzzy") (if (anchors == "percentile") c(0.05, 0.5, 0.95) else numeric(0)) else if (anchors == "percentile") 0.5 else numeric(0)
+    if (!length(th) || anyNA(th)) th <- if (method == "fuzzy") (if (anchors == "percentile") c(0.05, 0.5, 0.95) else numeric(0))
+                                        else if (method == "indirect") (if (anchors == "percentile") c(0.2, 0.4, 0.6, 0.8) else numeric(0))
+                                        else if (anchors == "percentile") 0.5 else numeric(0)
     list(method = method, anchors = anchors, thresholds = th)
   })
   dir_raw <- raw$expectations %||% list()
@@ -51,6 +53,11 @@ normalize_qca <- function(raw) {
     # Solution whose configurations are tested: the parsimonious one (Sukhov et al., 2023) or the intermediate one.
     predictiveSolution = { k <- as.character(raw$predictiveSolution %||% "parsimonious")[1]; if (k %in% c("parsimonious", "intermediate", "complex")) k else "parsimonious" },
     predictiveSeed = { ps <- suppressWarnings(as.integer(raw$predictiveSeed %||% 2026L))[1]; if (is.na(ps) || ps < 1) 2026L else ps },
+    # Enhanced standard analysis (Schneider & Wagemann, 2012): contradictory simplifying assumptions and remainders that
+    # contradict necessary conditions are excluded from the parsimonious and intermediate solutions.
+    esa = isTRUE(raw$esa),
+    # Theory evaluation: a Boolean expression of the expected configurations (original variable names), or "".
+    theory = { t <- trimws(as.character(raw$theory %||% "")[1]); if (is.na(t)) "" else t },
     expectations = expect,
     # Outcome values coded by hand for truth-table rows: list of {outcome ("Y" or "~Y"), row, out}.
     rowOverrides = lapply(overrides, function(x) list(outcome = as.character(x$outcome %||% outcome)[1], row = as.integer(x$row)[1], out = as.character(x$out)[1]))
@@ -78,6 +85,10 @@ validate_qca <- function(df, o) {
       if (length(th) != 3) add("error", "qca_anchors", sprintf("'%s': the direct method needs three anchors (full non-membership, crossover, full membership).", v))
       else if (!(all(diff(th) > 0) || all(diff(th) < 0))) add("error", "qca_anchors", sprintf("'%s': the three anchors must be strictly increasing (or strictly decreasing for a reversed set).", v))
       if (c0$anchors == "percentile" && length(th) && any(th <= 0 | th >= 1)) add("error", "qca_anchors", sprintf("'%s': percentiles must be between 0 and 1 (for example 0.05, 0.50, 0.95).", v))
+    }
+    if (c0$method == "indirect") {
+      if (length(th) < 2 || length(th) > 6) add("error", "qca_anchors", sprintf("'%s': the indirect method needs two to six cut points that sort the cases into ordered groups.", v))
+      if (c0$anchors == "percentile" && length(th) && any(th <= 0 | th >= 1)) add("error", "qca_anchors", sprintf("'%s': percentiles must be between 0 and 1.", v))
     }
     if (c0$method == "crisp") {
       if (!length(th) || length(th) > 2) add("error", "qca_thresholds", sprintf("'%s': give one threshold (crisp set) or two (multi-value, three categories).", v))
@@ -122,6 +133,9 @@ qca_calibrate_one <- function(x, c0) {
     stop(analysis_failure("calibration", "Two calibration anchors coincide.", "With percentile anchors this happens when many cases share a value; set the anchors as values instead."))
   set <- switch(c0$method,
                 fuzzy = QCA::calibrate(x, type = "fuzzy", method = "direct", thresholds = th),
+                # Indirect method (Ragin, 2008): the cut points sort the cases into ordered groups, whose qualitative
+                # memberships (0, ..., 1) are smoothed by a fractional logit of the raw values (QCA::calibrate).
+                indirect = QCA::calibrate(x, type = "fuzzy", method = "indirect", thresholds = sort(th)),
                 crisp = QCA::calibrate(x, type = "crisp", thresholds = th),
                 none = x)
   list(set = as.numeric(set), values = th, percentiles = probs)
@@ -222,10 +236,27 @@ qca_sufficiency <- function(cal_s, out_s, conds_s, o, n_cut, map, mv, neg = FALS
   })
   n_rows_possible <- prod(tt$noflevels)
   covered <- sum(t0$n[t0$n >= n_cut])
-  mini <- function(...) qca_with_limit(suppressWarnings(QCA::minimize(tt, details = TRUE, ...)))
+  # ESA: the remainders that may not be used as simplifying assumptions.
+  esa_rows <- NULL
+  if (isTRUE(o$esa)) {
+    contra <- tryCatch(QCA::findRows(obj = tt, type = 2), error = function(e) integer(0))
+    yv <- if (neg) 1 - cal_s[[out_s]] else cal_s[[out_s]]
+    nec <- Filter(function(cn) !(cn %in% mv) && { x <- cal_s[[cn]]; sum(pmin(x, yv)) / sum(yv) >= o$necessityCut }, conds_s)
+    unten <- if (length(nec)) tryCatch(QCA::findRows(obj = tt, expression = paste(paste0("~", nec), collapse = " + "), type = 1), error = function(e) integer(0)) else integer(0)
+    esa_rows <- sort(unique(c(contra, unten)))
+  }
+  mini <- function(...) {
+    a <- list(...)
+    tt_use <- tt
+    # ESA: the excluded remainders are coded 0, so minimize() cannot use them as simplifying assumptions
+    # (the same result as exclude =, which minimize() cannot take from inside a function).
+    if (length(esa_rows) && identical(a$include, "?")) { k <- rownames(tt_use$tt) %in% as.character(esa_rows) & tt_use$tt$OUT == "?"; tt_use$tt$OUT[k] <- "0" }
+    qca_with_limit(suppressWarnings(QCA::minimize(tt_use, details = TRUE, ...)))
+  }
   positive <- any(t0$OUT == "1")
   inc1 <- suppressWarnings(as.numeric(t0$incl[t0$OUT == "1"]))
   res <- list(outcome = outcome_label(o, neg), negated = neg, rows = rows, overridden = as.list(overridden),
+              esa = if (isTRUE(o$esa)) list(excluded = as.list(esa_rows %||% integer(0))) else NULL,
               consistencyCutoffUsed = if (length(inc1)) min(inc1) else NULL,
               nRowsPossible = n_rows_possible, nRowsObserved = nrow(t0), nRemainders = n_rows_possible - nrow(t0),
               casesInRows = covered, nCut = n_cut)
@@ -376,6 +407,26 @@ run_qca <- function(df, o, missing_code = NULL) {
     durationSeconds = as.numeric(difftime(Sys.time(), t0, units = "secs")),
     .derived = list(nInput = nrow(df), rows = rows, tables = list(sets = setsTab))
   )
+  # Skewness, SUIN necessity, robustness fit, theory evaluation and the case typology of the main solution.
+  out$skewness <- qca_skewness(cal_s, map)
+  sk <- Filter(function(x) x$skewed, out$skewness)
+  if (length(sk)) out$warnings <- as.list(unique(c(unlist(out$warnings), sprintf("Skewed set(s): %s (more than 80%% or fewer than 20%% of the cases above 0.5). Skewed sets inflate consistency and coverage (Oana et al., 2021).",
+                                                                      paste(vapply(sk, `[[`, "", "set"), collapse = ", ")))))
+  out$necessity[[1]]$suin <- qca_suin(cal_s, out_s, conds_s, o, map)
+  # The robustness fit re-minimises the truth table three times; with severe model ambiguity each run is very slow and
+  # the fit of an ambiguous solution cannot be interpreted, so it is skipped and the reason reported.
+  ambiguous <- any(unlist(sufficiency[[1]]$modelsTotal %||% list()) > QCA_MAX_AMBIGUITY)
+  out$robustFit <- if (isTRUE(o$sensitivity) && !ambiguous) tryCatch(qca_robust_fit(cal_s, out_s, conds_s, o, n_cut, mv, map), error = function(e) NULL) else NULL
+  if (isTRUE(o$sensitivity) && ambiguous) out$warnings <- as.list(unique(c(unlist(out$warnings), "The robustness fit (Oana & Schneider, 2024) was not computed: the solution has too many equally good models (model ambiguity) to compare.")))
+  s1 <- sufficiency[[1]]
+  main_models <- if (length(s1$intermediate)) s1$intermediate[[1]]$models else s1$parsimonious %||% s1$complex
+  sol_m <- if (length(main_models) && !is.null(main_models[[1]]$memberships)) main_models[[1]]$memberships$solution else NULL
+  if (!is.null(sol_m)) {
+    y <- cal_s[[out_s]]
+    out$caseTypes <- list(solution = main_models[[1]]$expression, types = qca_case_types(sol_m, y, rows))
+    if (nzchar(o$theory %||% "")) out$theory <- qca_theory(o$theory, sol_m, y, cal_s, map, rows)
+  }
+  if (!is.null(out$robustFit)) out$packages$SetMethods <- out$robustFit$package
   out$checklist <- qca_checklist(out)
   out
 }
@@ -395,6 +446,7 @@ qca_code <- function(o, safe, n_cut, missing_code, mv) {
     th <- if (c0$anchors == "percentile" && c0$method != "none") paste0("quantile(d[[", q(v), "]], c(", num(c0$thresholds), "), names = FALSE)") else paste0("c(", num(c0$thresholds), ")")
     lines <- c(lines, switch(c0$method,
       fuzzy = paste0("cal$", safe[[v]], " <- calibrate(d[[", q(v), "]], type = \"fuzzy\", method = \"direct\", thresholds = ", th, ")"),
+      indirect = paste0("cal$", safe[[v]], " <- calibrate(d[[", q(v), "]], type = \"fuzzy\", method = \"indirect\", thresholds = sort(", th, "))"),
       crisp = paste0("cal$", safe[[v]], " <- calibrate(d[[", q(v), "]], type = \"crisp\", thresholds = ", th, ")"),
       none = paste0("cal$", safe[[v]], " <- d[[", q(v), "]]   # already calibrated")))
   }
@@ -413,9 +465,14 @@ qca_code <- function(o, safe, n_cut, missing_code, mv) {
                unlist(lapply(Filter(function(x) identical(x$outcome, if (startsWith(y, "~")) paste0("~", o$outcome) else o$outcome), o$rowOverrides),
                              function(x) sprintf("tt$tt[\"%d\", \"OUT\"] <- \"%s\"   # outcome coded by hand for this row", x$row, x$out))),
                "tt",
+               if (!startsWith(y, "~")) sprintf("superSubset(cal, outcome = %s, conditions = c(%s), relation = \"necessity\", incl.cut = %s, cov.cut = 0.6, ron.cut = 0.5, depth = 2)   # SUIN necessary conditions",
+                                                q(y), paste(vapply(conds, q, ""), collapse = ", "), o$necessityCut),
+               if (isTRUE(o$esa)) c("# Enhanced standard analysis (Schneider & Wagemann, 2013): contradictory simplifying assumptions (and, in PathLab, remainders",
+                                    "# that lack a necessary condition, found with findRows(obj = tt, expression = \"~A + ~B\", type = 1)) are excluded.",
+                                    "esa_rows <- findRows(obj = tt, type = 2)"),
                "minimize(tt, details = TRUE)                     # complex (conservative) solution",
-               "minimize(tt, include = \"?\", details = TRUE)       # parsimonious solution",
-               if (length(dir)) sprintf("minimize(tt, include = \"?\", dir.exp = c(%s), details = TRUE)   # intermediate solution", paste(vapply(dir, q, ""), collapse = ", ")))
+               sprintf("minimize(tt, include = \"?\"%s, details = TRUE)       # parsimonious solution", if (isTRUE(o$esa)) ", exclude = esa_rows" else ""),
+               if (length(dir)) sprintf("minimize(tt, include = \"?\", dir.exp = c(%s)%s, details = TRUE)   # intermediate solution", paste(vapply(dir, q, ""), collapse = ", "), if (isTRUE(o$esa)) ", exclude = esa_rows" else ""))
   }
   paste(lines, collapse = "\n")
 }
@@ -515,6 +572,7 @@ qca_body_html <- function(res, flow = NULL) {
       a("<p class=\"note\">&#9679; core condition present, &#8226; peripheral condition present, &#8855; core condition absent, &#8856; peripheral condition absent; blank: does not matter. Core conditions are part of the parsimonious solution; peripheral conditions appear only in the intermediate solution.</p>")
     }
   }
+  a(qca_more_html(res))
   a(qca_sensitivity_html(res$sensitivity))
   a(qca_predictive_html(res$predictive))
   a(qca_tobit_html(res$tobit))
@@ -562,6 +620,17 @@ qca_sheets <- function(res, project_name) {
          do.call(rbind, lapply(res$sensitivity$tests, function(t) data.frame(Test = t$test, Change = t$change, Solution = t$solution, Consistency = num_of(t$inclS),
                                                                                Coverage = num_of(t$covS), SameSolution = isTRUE(t$same), OriginalConfigurationsKept = t$kept, stringsAsFactors = FALSE))),
        PredictiveValidity = qca_predictive_sheet(res$predictive),
+       SUIN = if (!length(res$necessity[[1]]$suin)) data.frame(Note = "No SUIN condition passes the thresholds") else
+         do.call(rbind, lapply(res$necessity[[1]]$suin, function(x) data.frame(Expression = x$expression, Disjunction = isTRUE(x$disjunction), ConsistencyN = num_of(x$inclN), RoN = num_of(x$RoN), CoverageN = num_of(x$covN), stringsAsFactors = FALSE))),
+       Skewness = if (!length(res$skewness)) data.frame(Note = "Not available") else
+         do.call(rbind, lapply(res$skewness, function(x) data.frame(Set = x$set, CasesAbove05 = x$above, ShareAbove05 = num_of(x$share), Skewed = isTRUE(x$skewed), stringsAsFactors = FALSE))),
+       RobustnessFit = if (is.null(res$robustFit)) data.frame(Note = "Not computed (needs the sensitivity analysis and SetMethods)") else
+         data.frame(Measure = c("RF_cov", "RF_cons", "RF_SC_minTS", "RF_SC_maxTS"), Value = c(num_of(res$robustFit$RF_cov), num_of(res$robustFit$RF_cons), num_of(res$robustFit$RF_SC_minTS), num_of(res$robustFit$RF_SC_maxTS))),
+       CaseTypes = if (is.null(res$caseTypes)) data.frame(Note = "No solution") else
+         do.call(rbind, lapply(res$caseTypes$types, function(x) data.frame(Solution = res$caseTypes$solution, Type = x$type, Cases = x$n, Rows = paste(unlist(x$rows), collapse = ", "), stringsAsFactors = FALSE))),
+       TheoryEvaluation = if (is.null(res$theory) || !is.null(res$theory$error)) data.frame(Note = res$theory$error %||% "No theory was given") else
+         do.call(rbind, lapply(res$theory$intersections, function(x) data.frame(Theory = res$theory$theory, Intersection = x$intersection, Meaning = x$label, Cases = x$cases, WithOutcome = x$withOutcome,
+                                                                                 WithoutOutcome = x$withoutOutcome, Consistency = num_of(x$incl), Coverage = num_of(x$cov), stringsAsFactors = FALSE))),
        Checklist = if (!length(res$checklist)) data.frame(Note = "Not available") else
          do.call(rbind, lapply(res$checklist, function(x) data.frame(Status = x$status, Item = x$item, Detail = x$detail, Source = x$source, stringsAsFactors = FALSE))))
 }
@@ -1039,6 +1108,11 @@ qca_references_html <- function(res) {
             "Ragin, C. C. (2008). <i>Redesigning social inquiry: Fuzzy sets and beyond</i>. University of Chicago Press.",
             "Schneider, C. Q., &amp; Wagemann, C. (2010). Standards of good practice in qualitative comparative analysis (QCA) and fuzzy-sets. <i>Comparative Sociology, 9</i>(3), 397–418.",
             "Schneider, C. Q., &amp; Wagemann, C. (2012). <i>Set-theoretic methods for the social sciences: A guide to qualitative comparative analysis</i>. Cambridge University Press.",
+            if (length(res$necessity[[1]]$suin)) "Mahoney, J., Kimball, E., &amp; Koivu, K. L. (2009). The logic of historical explanation in the social sciences. <i>Comparative Political Studies, 42</i>(1), 114–146.",
+            if (!is.null(res$sufficiency[[1]]$esa)) "Schneider, C. Q., &amp; Wagemann, C. (2013). Doing justice to logical remainders in QCA: Moving beyond the standard analysis. <i>Political Research Quarterly, 66</i>(1), 211–220.",
+            if (!is.null(res$caseTypes)) "Schneider, C. Q., &amp; Rohlfing, I. (2013). Combining QCA and process tracing in set-theoretic multi-method research. <i>Sociological Methods &amp; Research, 42</i>(4), 559–597.",
+            if (!is.null(res$theory)) "Ragin, C. C. (1987). <i>The comparative method: Moving beyond qualitative and quantitative strategies</i>. University of California Press.",
+            if (!is.null(res$robustFit)) sprintf("Oana, I.-E., Medzihorsky, J., Quaranta, M., &amp; Schneider, C. Q. (2023). <i>SetMethods: Functions for set-theoretic multi-method research and advanced QCA</i> (R package version %s).", html_escape(res$robustFit$package %||% "")),
             if (!is.null(res$tobit) && length(res$tobit$models)) c("Tobin, J. (1958). Estimation of relationships for limited dependent variables. <i>Econometrica, 26</i>(1), 24–36.",
                                                                     sprintf("Yee, T. W. (2015). <i>Vector generalized linear and additive models: With an implementation in R</i>. Springer. (VGAM package version %s.)", html_escape(res$tobit$package %||% ""))))
   paste0("<h3>References</h3><ul class=\"refs\">", paste0("<li>", refs, "</li>", collapse = ""), "</ul>")
@@ -1249,4 +1323,135 @@ qca_predictive_code <- function(o, safe, mv) {
           if (identical(o$predictiveSolution, "intermediate")) "  sol_h <- if (!is.null(sol$i.sol)) sol$i.sol[[1]] else sol" else "  sol_h <- sol   # parsimonious solution",
           sprintf("  print(pof(paste(sol_h$solution[[1]], collapse = \" + \"), outcome = %s, data = cal[h$test, ], relation = \"sufficiency\"))   # consistency and coverage on the holdout half", q(out)),
           "}"), collapse = "\n")
+}
+
+# ==== More QCA: skewness, SUIN, robustness fit, theory evaluation, case typology ======================================
+
+#' Skewed set memberships (Oana, Schneider & Thomann, 2021): the share of cases with membership above 0.5. Below 20% or
+#' above 80% the set is skewed, which inflates consistency and coverage and can make the analysis trivial.
+qca_skewness <- function(cal_s, map) lapply(names(cal_s), function(k) {
+  share <- mean(cal_s[[k]] > 0.5)
+  list(set = unname(map[[k]]), above = sum(cal_s[[k]] > 0.5), share = share, skewed = share < 0.2 || share > 0.8)
+})
+
+#' SUIN necessary conditions (Mahoney, Kimball & Koivu, 2009; Schneider & Wagemann, 2012): disjunctions and conjunctions
+#' of up to two conditions that pass the necessity consistency, coverage and relevance thresholds (QCA::superSubset).
+qca_suin <- function(cal_s, out_s, conds_s, o, map, neg = FALSE) {
+  outcome <- if (neg) paste0("~", out_s) else out_s
+  ss <- tryCatch(suppressWarnings(QCA::superSubset(cal_s, outcome = outcome, conditions = conds_s, relation = "necessity", incl.cut = o$necessityCut,
+                                                   cov.cut = 0.6, ron.cut = 0.5, depth = 2)), error = function(e) NULL)
+  if (is.null(ss) || is.null(ss$incl.cov) || !nrow(ss$incl.cov)) return(list())
+  ic <- ss$incl.cov
+  lapply(seq_len(nrow(ic)), function(i) list(expression = qca_display(rownames(ic)[i], map), inclN = unname(ic$inclN[i]), RoN = unname(ic$RoN[i]), covN = unname(ic$covN[i]),
+                                            disjunction = grepl("+", rownames(ic)[i], fixed = TRUE)))
+}
+
+#' Robustness fit (Oana & Schneider, 2024; SetMethods::rob.fit): the initial solution against the test set of solutions
+#' from the sensitivity ranges (consistency ±0.05, frequency +1). RF_cov and RF_cons close to 1 and RF_SC close to 1
+#' mean the solution is robust to these analytic choices.
+qca_robust_fit <- function(cal_s, out_s, conds_s, o, n_cut, mv, map) {
+  if (!requireNamespace("SetMethods", quietly = TRUE)) return(NULL)
+  dir <- unlist(lapply(conds_s, function(cn) { e <- o$expectations[[map[[cn]]]] %||% "present"; if (cn %in% mv || e == "either") NULL else if (e == "absent") paste0("~", cn) else cn }))
+  sol <- function(incl, nc) tryCatch({
+    tt <- suppressWarnings(QCA::truthTable(cal_s, outcome = out_s, conditions = conds_s, incl.cut = incl, n.cut = nc, pri.cut = o$priCut))
+    if (!any(tt$tt$OUT == "1")) return(NULL)
+    qca_with_limit(suppressWarnings(if (length(dir)) QCA::minimize(tt, include = "?", dir.exp = dir, details = TRUE) else QCA::minimize(tt, include = "?", details = TRUE)))
+  }, error = function(e) NULL)
+  is <- sol(o$inclCut, n_cut); if (is.null(is)) return(NULL)
+  ts <- Filter(Negate(is.null), list(sol(max(0.5, o$inclCut - 0.05), n_cut), sol(min(1, o$inclCut + 0.05), n_cut), sol(o$inclCut, n_cut + 1)))
+  if (!length(ts)) return(NULL)
+  rf <- tryCatch(suppressWarnings(SetMethods::rob.fit(test_sol = ts, initial_sol = is, outcome = out_s)), error = function(e) NULL)
+  if (is.null(rf)) return(NULL)
+  v <- as.numeric(rf[1, ]); names(v) <- colnames(rf)
+  list(tests = length(ts), RF_cov = num_or_null(v[["RF_cov"]]), RF_cons = num_or_null(v[["RF_cons"]]), RF_SC_minTS = num_or_null(v[["RF_SC_minTS"]]), RF_SC_maxTS = num_or_null(v[["RF_SC_maxTS"]]),
+       package = as.character(utils::packageVersion("SetMethods")))
+}
+
+#' Membership in a Boolean expression written with the original variable names (A*~B + C).
+qca_eval <- function(expr, cal_s, map) {
+  inv <- stats::setNames(names(map), unname(map))          # original name -> safe name
+  m <- gregexpr("[A-Za-z_][A-Za-z0-9_.]*", expr, perl = TRUE)
+  tok <- regmatches(expr, m)[[1]]
+  regmatches(expr, m) <- list(vapply(tok, function(t) if (t %in% names(inv)) inv[[t]] else t, ""))
+  as.numeric(admisc::compute(expr, data = cal_s))
+}
+
+#' Theory evaluation (Ragin, 1987; Schneider & Wagemann, 2012): the theory T against the solution S. The four intersections
+#' T*S (supported), ~T*S (expanded theory), T*~S (unsupported) and ~T*~S, with their cases and fit for the outcome.
+qca_theory <- function(theory, sol_m, y, cal_s, map, rows) {
+  tm <- tryCatch(qca_eval(theory, cal_s, map), error = function(e) NULL)
+  if (is.null(tm)) return(list(theory = theory, error = "The theory could not be read. Write it with the variable names, * for and, + for or and ~ for not, e.g. A*~B + C."))
+  parts <- list(`T*S` = pmin(tm, sol_m), `~T*S` = pmin(1 - tm, sol_m), `T*~S` = pmin(tm, 1 - sol_m), `~T*~S` = pmin(1 - tm, 1 - sol_m))
+  lab <- c(`T*S` = "Theory and solution (supported)", `~T*S` = "Solution only (expands the theory)", `T*~S` = "Theory only (not supported)", `~T*~S` = "Neither")
+  fit <- function(x) { s <- sum(x); list(incl = if (s > 0) sum(pmin(x, y)) / s else NA_real_, cov = sum(pmin(x, y)) / sum(y)) }
+  list(theory = theory, theoryFit = { f <- fit(tm); list(incl = num_or_null(f$incl), cov = num_or_null(f$cov)) },
+       intersections = lapply(names(parts), function(k) { x <- parts[[k]]; inn <- x > 0.5; f <- fit(x)
+         list(intersection = k, label = lab[[k]], cases = sum(inn), withOutcome = sum(inn & y > 0.5), withoutOutcome = sum(inn & y <= 0.5),
+              incl = num_or_null(f$incl), cov = num_or_null(f$cov), caseRows = as.list(rows[inn])) }))
+}
+
+#' Case typology for the sufficiency solution (Schneider & Rohlfing, 2013): typical, deviant in degree and in kind for
+#' consistency, deviant for coverage and individually irrelevant cases, with the data rows of each.
+qca_case_types <- function(sol_m, y, rows) {
+  ty <- ifelse(sol_m > 0.5 & y > 0.5 & sol_m <= y, "Typical",
+        ifelse(sol_m > 0.5 & y > 0.5, "Deviant consistency in degree",
+        ifelse(sol_m > 0.5 & y <= 0.5, "Deviant consistency in kind",
+        ifelse(sol_m <= 0.5 & y > 0.5, "Deviant coverage", "Individually irrelevant"))))
+  kinds <- c("Typical", "Deviant consistency in degree", "Deviant consistency in kind", "Deviant coverage", "Individually irrelevant")
+  lapply(kinds, function(k) { i <- which(ty == k); o <- order(-abs(sol_m[i] - 0.5) - abs(y[i] - 0.5))
+    list(type = k, n = length(i), rows = as.list(rows[i][o][seq_len(min(30, length(i)))])) })
+}
+
+#' Report sections for ESA, SUIN, skewness, the robustness fit, the case typology and the theory evaluation.
+qca_more_html <- function(res) {
+  e <- html_escape; S <- character(0)
+  s1 <- res$sufficiency[[1]]
+  if (!is.null(s1$esa)) S <- c(S, sprintf("<p>Enhanced standard analysis (Schneider &amp; Wagemann, 2013): %s</p>",
+    if (length(s1$esa$excluded)) sprintf("truth-table remainder rows %s were excluded as contradictory or untenable simplifying assumptions.", paste(unlist(s1$esa$excluded), collapse = ", ")) else "no contradictory or untenable simplifying assumptions were found."))
+  su <- res$necessity[[1]]$suin
+  if (length(su)) S <- c(S, "<h3>SUIN necessary conditions</h3>", html_table(c("Expression", "Type", "Consistency", "RoN", "Coverage"),
+    lapply(su, function(x) c(e(x$expression), if (isTRUE(x$disjunction)) "Disjunction (SUIN)" else "Conjunction", fmt(x$inclN), fmt(x$RoN), fmt(x$covN))),
+    "Combinations of up to two conditions that pass the necessity thresholds (QCA::superSubset; Mahoney et al., 2009)", num_cols = 3:5))
+  if (length(res$skewness)) S <- c(S, "<h3>Skewness of the sets</h3>", html_table(c("Set", "Cases above 0.5", "Share above 0.5", "Skewed"),
+    lapply(res$skewness, function(x) c(e(x$set), x$above, sprintf("%.1f%%", 100 * x$share), if (isTRUE(x$skewed)) "Yes" else "No")),
+    "Share of cases with membership above 0.5; below 20% or above 80% the set is skewed (Oana, Schneider &amp; Thomann, 2021)", num_cols = 2:3))
+  rf <- res$robustFit
+  if (!is.null(rf)) S <- c(S, "<h3>Robustness fit</h3>", html_table(c("Measure", "Value"),
+    list(c("RF_cov", fmt(rf$RF_cov)), c("RF_cons", fmt(rf$RF_cons)), c("RF_SC_minTS", fmt(rf$RF_SC_minTS)), c("RF_SC_maxTS", fmt(rf$RF_SC_maxTS))),
+    sprintf("The solution against %d test solution(s) from the sensitivity ranges (Oana &amp; Schneider, 2024; SetMethods %s)", rf$tests, e(rf$package)), num_cols = 2))
+  ct <- res$caseTypes
+  if (!is.null(ct)) S <- c(S, "<h3>Case typology</h3>", html_table(c("Case type", "Cases", "Data rows"),
+    lapply(ct$types, function(x) c(e(x$type), x$n, e(paste(unlist(x$rows), collapse = ", ")))),
+    sprintf("Cases by their membership in the solution (%s) and the outcome (Schneider &amp; Rohlfing, 2013)", e(ct$solution)), num_cols = 2))
+  th <- res$theory
+  if (!is.null(th)) S <- c(S, "<h3>Theory evaluation</h3>", if (!is.null(th$error)) sprintf("<div class=\"warn\">%s</div>", e(th$error)) else c(
+    sprintf("<p>Theory T = %s (consistency %s, coverage %s) against the solution S (Ragin, 1987; Schneider &amp; Wagemann, 2012).</p>", e(th$theory), fmt(th$theoryFit$incl), fmt(th$theoryFit$cov)),
+    html_table(c("Intersection", "Meaning", "Cases", "With the outcome", "Without the outcome", "Consistency", "Coverage"),
+      lapply(th$intersections, function(x) c(e(x$intersection), e(x$label), x$cases, x$withOutcome, x$withoutOutcome, fmt(x$incl), fmt(x$cov))), "Intersections of theory and solution", num_cols = 3:7)))
+  paste(S, collapse = "
+")
+}
+
+# ---- Calibration preview (builder) ---------------------------------------------------------------------------------
+# For the calibration table: what each set's anchors are in the data's own units (percentiles turned into values),
+# the range of the data, and for crisp sets the number of cases in each category. Uses the same rows as the analysis
+# (missing-value code removed, complete cases of the outcome and the conditions). Never fails: a set that cannot be
+# summarised gets NULL values.
+qca_anchor_preview <- function(df, o, missing_code = NULL) {
+  vars <- intersect(Filter(nzchar, c(o$outcome, o$conditions)), names(df))
+  if (!length(vars)) return(list(n = 0L, sets = list()))
+  d <- df[, vars, drop = FALSE]
+  if (!is.null(missing_code)) for (cn in vars) { hit <- !is.na(d[[cn]]) & d[[cn]] == missing_code; d[[cn]][hit] <- NA }
+  d <- d[stats::complete.cases(d), , drop = FALSE]
+  sets <- lapply(setNames(vars, vars), function(v) {
+    x <- suppressWarnings(as.numeric(d[[v]]))
+    c0 <- o$calibration[[v]]
+    if (!length(x) || all(is.na(x)) || is.null(c0)) return(NULL)
+    th <- c0$thresholds
+    vals <- if (c0$method == "none" || !length(th)) numeric(0)
+            else if (c0$anchors == "percentile") unname(stats::quantile(x, pmin(pmax(th, 0), 1), names = FALSE, na.rm = TRUE)) else th
+    counts <- if (c0$method == "crisp" && length(vals)) as.integer(table(factor(findInterval(x, sort(vals)), levels = 0:length(vals)))) else NULL
+    list(values = as.list(signif(vals, 6)), min = min(x), max = max(x), counts = if (is.null(counts)) NULL else as.list(counts))
+  })
+  list(n = nrow(d), sets = sets)
 }

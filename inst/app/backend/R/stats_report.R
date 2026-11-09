@@ -37,6 +37,15 @@ STATIC_REFS <- list(
   west1995 = list(cite = "West et al., 1995", ref = "West, S. G., Finch, J. F., &amp; Curran, P. J. (1995). Structural equation models with nonnormal variables: Problems and remedies. In R. H. Hoyle (Ed.), <i>Structural equation modeling: Concepts, issues, and applications</i> (pp. 56&ndash;75). Sage."),
   delacre2017 = list(cite = "Delacre et al., 2017", ref = "Delacre, M., Lakens, D., &amp; Leys, C. (2017). Why psychologists should by default use Welch&rsquo;s <i>t</i>-test instead of Student&rsquo;s <i>t</i>-test. <i>International Review of Social Psychology, 30</i>(1), 92&ndash;101. https://doi.org/10.5334/irsp.82"),
   nunnally1994 = list(cite = "Nunnally &amp; Bernstein, 1994", ref = "Nunnally, J. C., &amp; Bernstein, I. H. (1994). <i>Psychometric theory</i> (3rd ed.). McGraw-Hill."),
+  wilcox2017 = list(cite = "Wilcox, 2017", ref = "Wilcox, R. R. (2017). <i>Introduction to robust estimation and hypothesis testing</i> (4th ed.). Academic Press."),
+  efron1993 = list(cite = "Efron &amp; Tibshirani, 1993", ref = "Efron, B., &amp; Tibshirani, R. J. (1993). <i>An introduction to the bootstrap</i>. Chapman &amp; Hall."),
+  lakens2017 = list(cite = "Lakens, 2017", ref = "Lakens, D. (2017). Equivalence tests: A practical primer for <i>t</i> tests, correlations, and meta-analyses. <i>Social Psychological and Personality Science, 8</i>(4), 355&ndash;362. https://doi.org/10.1177/1948550617697177"),
+  landis1977 = list(cite = "Landis &amp; Koch, 1977", ref = "Landis, J. R., &amp; Koch, G. G. (1977). The measurement of observer agreement for categorical data. <i>Biometrics, 33</i>(1), 159&ndash;174. https://doi.org/10.2307/2529310"),
+  cohen1960 = list(cite = "Cohen, 1960", ref = "Cohen, J. (1960). A coefficient of agreement for nominal scales. <i>Educational and Psychological Measurement, 20</i>(1), 37&ndash;46. https://doi.org/10.1177/001316446002000104"),
+  fleiss1971 = list(cite = "Fleiss, 1971", ref = "Fleiss, J. L. (1971). Measuring nominal scale agreement among many raters. <i>Psychological Bulletin, 76</i>(5), 378&ndash;382. https://doi.org/10.1037/h0031619"),
+  krippendorff2004 = list(cite = "Krippendorff, 2004", ref = "Krippendorff, K. (2004). <i>Content analysis: An introduction to its methodology</i> (2nd ed.). Sage."),
+  koo2016 = list(cite = "Koo &amp; Li, 2016", ref = "Koo, T. K., &amp; Li, M. Y. (2016). A guideline of selecting and reporting intraclass correlation coefficients for reliability research. <i>Journal of Chiropractic Medicine, 15</i>(2), 155&ndash;163. https://doi.org/10.1016/j.jcm.2016.02.012"),
+  mcgraw1996 = list(cite = "McGraw &amp; Wong, 1996", ref = "McGraw, K. O., &amp; Wong, S. P. (1996). Forming inferences about some intraclass correlation coefficients. <i>Psychological Methods, 1</i>(1), 30&ndash;46. https://doi.org/10.1037/1082-989X.1.1.30"),
   lee2013 = list(cite = "Lee &amp; Wagenmakers, 2013", ref = "Lee, M. D., &amp; Wagenmakers, E.-J. (2013). <i>Bayesian cognitive modeling: A practical course</i>. Cambridge University Press."),
   hausman1978 = list(cite = "Hausman, 1978", ref = "Hausman, J. A. (1978). Specification tests in econometrics. <i>Econometrica, 46</i>(6), 1251&ndash;1271. https://doi.org/10.2307/1913827"),
   wooldridge2010 = list(cite = "Wooldridge, 2010", ref = "Wooldridge, J. M. (2010). <i>Econometric analysis of cross section and panel data</i> (2nd ed.). MIT Press."),
@@ -55,9 +64,8 @@ STATIC_REFS <- list(
 
 #' In-text citation and APA reference of R or an R package, from its citation() entry.
 rp_pkg_ref <- function(pkg) {
-  cit <- tryCatch(if (pkg == "R") utils::citation() else utils::citation(pkg), error = function(e) NULL)
-  if (is.null(cit) || !length(cit)) return(NULL)
-  b <- cit[[1]]
+  b <- tryCatch(pkg_citation(pkg), error = function(e) NULL)
+  if (is.null(b)) return(NULL)
   au <- b$author
   fam <- vapply(seq_along(au), function(i) { f <- paste(au[i]$family, collapse = " "); if (nzchar(f)) f else paste(au[i]$given, collapse = " ") }, "")
   ini <- vapply(seq_along(au), function(i) {
@@ -391,6 +399,42 @@ narr_reliability <- function(res, ctx) {
   list(text = txt, refs = "nunnally1994", method = "Internal consistency was assessed with Cronbach&rsquo;s &alpha; and McDonald&rsquo;s &omega;.")
 }
 
+narr_kappa <- function(res, ctx) {
+  k <- Filter(function(t) t$id == "kappa", res$tables); if (!length(k)) return(NULL)
+  raters <- unlist(res$options$raters); level <- res$options$ciWidth %||% 95
+  word <- function(x) tolower(kappa_label(as.numeric(x)))
+  out <- character(0); refs <- "landis1977"
+  for (r in k[[1]]$rows) {
+    if (!rp_ok(rp_cell(r, "kappa"))) next
+    name <- if (grepl("^Cohen", r$stat)) { refs <- c(refs, "cohen1960"); "Cohen&rsquo;s &kappa;" } else if (grepl("^Weighted", r$stat)) paste0("weighted &kappa; (", sub("^Weighted kappa \\((.*)\\)$", "\\1", r$stat), ")")
+            else if (grepl("^Fleiss", r$stat)) { refs <- c(refs, "fleiss1971"); "Fleiss&rsquo; &kappa;" } else "Light&rsquo;s &kappa;"
+    out <- c(out, paste0(if (!length(out)) paste0("Agreement between the ", length(raters), " raters (", rp_esc(rp_list(raters)), ") was ", word(r$kappa), ", ") else paste0("; ", name, " = "),
+                         if (!length(out)) paste0(name, " = ") else "", rp_n(r$kappa, 2, TRUE),
+                         if (!is.null(rp_ci(rp_cell(r, "lower"), rp_cell(r, "upper"), level))) paste0(", ", rp_ci(r$lower, r$upper, level, 2, TRUE)) else "",
+                         if (rp_ok(rp_cell(r, "z"))) paste0(", <i>z</i> = ", rp_n(r$z, 2), ", ", rp_p(r$p)) else ""))
+  }
+  if (!length(out)) return(NULL)
+  txt <- paste0(paste(out, collapse = ""), " (", rp_tab(ctx$tables), ").")
+  ka <- Filter(function(t) t$id == "kripp", res$tables)
+  if (length(ka) && rp_ok(rp_cell(ka[[1]]$rows[[1]], "alpha"))) { refs <- c(refs, "krippendorff2004")
+    a <- as.numeric(ka[[1]]$rows[[1]]$alpha)
+    txt <- paste0(txt, " Krippendorff&rsquo;s &alpha; was ", rp_n(a, 2, TRUE), if (a >= .8) ", above the .80 criterion for reliable coding" else if (a >= .667) ", which allows only tentative conclusions" else ", below the .667 minimum for reliable coding", " (Krippendorff, 2004).") }
+  list(text = paste0(txt, " Kappa values were interpreted following Landis and Koch (1977)."), refs = unique(refs),
+       method = "Inter-rater agreement for the categorical ratings was assessed with kappa statistics.")
+}
+
+narr_icc <- function(res, ctx) {
+  t <- Filter(function(t) t$id == "icc", res$tables); if (!length(t)) return(NULL)
+  rows <- t[[1]]$rows; raters <- unlist(res$options$raters); level <- res$options$ciWidth %||% 95
+  model <- sub("^Intraclass Correlation: ", "", t[[1]]$title)
+  part <- function(r, what) paste0("the ", what, " ICC was ", rp_n(r$icc, 2, TRUE), ", ", rp_ci(r$lower, r$upper, level, 2, TRUE), ", <i>F</i>(", rp_df(r$df1), ", ", rp_df(r$df2), ") = ", rp_n(r$f, 2), ", ", rp_p(r$p),
+                                    ", indicating ", tolower(icc_label(as.numeric(r$icc))), " reliability")
+  mp <- strsplit(model, ", ", fixed = TRUE)[[1]]
+  txt <- paste0("Using a ", tolower(mp[1]), " model with ", mp[2], " (McGraw &amp; Wong, 1996) for the ", length(raters), " raters (", rp_esc(rp_list(raters)), "), ",
+                part(rows[[1]], "single-rater"), "; ", part(rows[[2]], "average-rater"), " (", rp_tab(ctx$tables), "). Reliability was interpreted following Koo and Li (2016).")
+  list(text = txt, refs = c("mcgraw1996", "koo2016"), method = "Inter-rater reliability of the numeric ratings was assessed with intraclass correlation coefficients.")
+}
+
 narr_bayes <- function(res, ctx) {
   out <- character(0)
   bc <- Filter(function(t) t$id == "bcorr", res$tables)
@@ -513,11 +557,55 @@ narr_purtest <- function(res, ctx) {
 stats_narrative <- function(res, ctx) {
   f <- switch(res$proc, descriptives = narr_descriptives, ttestIS = narr_ttestIS, ttestPS = narr_ttestPS, ttestOneS = narr_ttestOneS, anovaOneW = narr_anovaOneW,
               ANOVA = , ancova = , anovaRM = narr_ANOVA, anovaNP = , anovaRMNP = narr_anovaNP, corrMatrix = , corrPart = narr_corr, contTables = , contTablesPaired = narr_contTables,
-              propTest2 = , propTestN = narr_props, reliability = narr_reliability, bcorr = , banova = narr_bayes, km = , cox = narr_survival, panel = narr_panel, pgmm = narr_pgmm, purtest = narr_purtest,
+              propTest2 = , propTestN = narr_props, reliability = narr_reliability, kappa = narr_kappa, icc = narr_icc, bcorr = , banova = , banovaRM = narr_bayes, km = , cox = narr_survival, panel = narr_panel, pgmm = narr_pgmm, purtest = narr_purtest,
               plotBar = , plotBox = , plotHist = , plotScatter = , plotLine = , plotRadar = , ggplot = narr_plot, NULL)
   out <- if (!is.null(f)) tryCatch(f(res, ctx), error = function(e) NULL) else NULL
   if (is.null(out) || !nzchar(out$text %||% "")) out <- list(text = paste0("The results of the ", rp_esc(tolower(res$label)), " are reported in ", if (length(ctx$tables)) rp_tab(ctx$tables) else if (length(ctx$figures)) paste("Figure", ctx$figures[1]) else "the output", "."), refs = character(0), method = out$method)
+  for (fx in list(narr_tost, narr_robust)) {
+    eq <- tryCatch(fx(res), error = function(e) NULL)
+    if (!is.null(eq)) { out$text <- paste(out$text, eq$text); out$refs <- unique(c(out$refs, eq$refs)); out$method <- paste(c(out$method, eq$method), collapse = " ") }
+  }
+  eq <- NULL
+  if (!is.null(eq)) { out$text <- paste(out$text, eq$text); out$refs <- unique(c(out$refs, eq$refs)); out$method <- paste(c(out$method, eq$method), collapse = " ") }
   out
+}
+
+#' Robust-test, bootstrap and Bayesian contingency sentences, added to the write-ups of the analyses that offer them.
+narr_robust <- function(res) {
+  tb <- function(id) { x <- Filter(function(t) t$id == id, res$tables); if (length(x)) x[[1]] else NULL }
+  txt <- character(0); refs <- character(0); tr <- as.numeric(res$options$trim %||% 0.2)
+  if (!is.null(t <- tb("robust_ttest"))) { refs <- "wilcox2017"
+    txt <- c(txt, paste0("Yuen&rsquo;s test on ", round(100 * tr), "% trimmed means (Wilcox, 2017) ", paste(vapply(t$rows, function(r) paste0("for ", rp_esc(r$var), " gave <i>t</i>(", rp_df(r$df), ") = ", rp_n(r$t, 2), ", ", rp_p(r$p),
+                                                       ", &xi; = ", rp_n(r$es, 2, TRUE)), ""), collapse = "; "), ".")) }
+  if (!is.null(t <- tb("robust_anova"))) { refs <- "wilcox2017"
+    txt <- c(txt, paste0("A robust ANOVA on ", round(100 * tr), "% trimmed means (Wilcox, 2017) ", paste(vapply(t$rows, function(r) paste0("for ", rp_esc(r$var %||% r$term), " gave ",
+      if (!is.null(r$df1)) paste0("<i>F</i>(", rp_df(r$df1), ", ", rp_df(r$df2), ") = ", rp_n(r$f, 2)) else paste0("<i>", if (is.null(r$stat)) "F" else "Q", "</i> = ", rp_n(r$stat, 2)), ", ", rp_p(r$p)), ""), collapse = "; "), ".")) }
+  for (id in c("boot_mean", "boot_cor")) if (!is.null(t <- tb(id))) { refs <- c(refs, "efron1993")
+    txt <- c(txt, paste0("Bias-corrected and accelerated bootstrap intervals (Efron &amp; Tibshirani, 1993) were ", paste(vapply(t$rows, function(r) paste0(rp_esc(r$var), " ", rp_ci(r$bl, r$bu, as.numeric(res$options$ciWidth %||% 95), 2, id == "boot_cor")), ""), collapse = "; "), ".")) }
+  if (!is.null(t <- tb("bf_cont"))) { r <- t$rows[[1]]; refs <- c(refs, "lee2013")
+    txt <- c(txt, paste0("A Bayesian contingency table test gave BF<sub>10</sub> = ", rp_bf(r$bf10), ", ", rp_bf_word(r$bf10), " (Lee &amp; Wagenmakers, 2013).")) }
+  if (!length(txt)) return(NULL)
+  list(text = paste(txt, collapse = " "), refs = unique(refs), method = NULL)
+}
+
+#' Equivalence test (TOST) sentences, added to the t-test and correlation write-ups.
+narr_tost <- function(res) {
+  rt <- Filter(function(t) t$id == "tost_result", res$tables); tt <- Filter(function(t) t$id == "tost", res$tables)
+  if (!length(rt) || !length(tt)) return(NULL)
+  o <- res$options; a <- as.numeric(o$eqAlpha %||% 0.05); level <- 100 * (1 - 2 * a); cor <- identical(res$proc, "corrMatrix")
+  lo <- o$eqLow %||% (if (cor) -0.3 else -0.5); hi <- o$eqHigh %||% (if (cor) 0.3 else 0.5)
+  bounds <- if (cor) sprintf("<i>r</i> = %s and %s", rp_n(lo, 2, TRUE), rp_n(hi, 2, TRUE)) else if (identical(o$eqBound, "raw")) sprintf("%s and %s (raw units)", rp_n(lo, 2), rp_n(hi, 2)) else sprintf("Cohen&rsquo;s <i>d</i> = %s and %s", rp_n(lo, 2), rp_n(hi, 2))
+  stat <- if (cor) "z" else "t"
+  parts <- vapply(rt[[1]]$rows, function(r) {
+    tr <- Filter(function(x) identical(x$var, r$var), tt[[1]]$rows)
+    worst <- tr[[which.max(vapply(tr, function(x) as.numeric(x$p), 0))]]
+    tst <- paste0("<i>", stat, "</i>", if (!cor) paste0("(", rp_df(worst$df), ")") else "", " = ", rp_n(worst$stat, 2), ", ", rp_p(worst$p))
+    verdict <- switch(r$result, "Equivalent" = "was statistically equivalent to zero", "Equivalent (trivial difference)" = "was statistically equivalent to zero, although different from zero (a trivially small effect)",
+                      "Not equivalent (different)" = "was not equivalent to zero and differed from zero", "could not be shown to be equivalent to zero, nor did it differ from zero (inconclusive)")
+    paste0("For ", rp_esc(r$var), ", the ", if (cor) "correlation" else "difference", " (", rp_n(r$est, 2, cor), ", ", rp_ci(r$cl, r$cu, level, 2, cor), ") ", verdict, ", ", tst)
+  }, "")
+  list(text = paste0("Equivalence was tested with two one-sided tests (TOST; Lakens, 2017) against bounds of ", bounds, ", &alpha; = ", rp_n(a, 2, TRUE), ". ", paste(parts, collapse = "; "), "."),
+       refs = "lakens2017", method = "Equivalence tests (TOST) examined whether effects were small enough to be considered negligible.")
 }
 
 # ---- APA tables ---------------------------------------------------------------------------------------------------

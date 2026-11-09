@@ -124,8 +124,15 @@ normalize_settings <- function(raw) {
       # 0 (or missing) = automatic: every available core.
       cores = if (is.null(nullish(braw$cores)) || identical(suppressWarnings(as.integer(braw$cores)), 0L)) max_cores() else int_in(braw$cores, 1L, 1, max_cores(), "Number of cores"),
       confidenceLevel = conf,
-      specificIndirect = !isFALSE(braw$specificIndirect)
+      specificIndirect = !isFALSE(braw$specificIndirect),
+      # BCa intervals (jackknife acceleration) in addition to the percentile intervals.
+      bca = isTRUE(braw$bca)
     ),
+    # Further assessment, each off unless chosen: bootstrap test of exact fit, Gaussian copula endogeneity test, CTA-PLS.
+    extras = { x <- raw$extras %||% list()
+      list(fitTest = isTRUE(x$fitTest), fitBoot = int_in(x$fitBoot, 499L, 99, 5000, "Fit test bootstrap samples"),
+           endogeneity = isTRUE(x$endogeneity), cta = isTRUE(x$cta), extrasBoot = int_in(x$extrasBoot, 1000L, 100, 10000, "Bootstrap samples"),
+           seed = int_in(x$seed, 2026L, 1, 2147483647, "Seed")) },
     predict = list(
       enabled = p_enabled,
       technique = tech,
@@ -286,7 +293,8 @@ validate_model <- function(model, settings, ds = NULL) {
     if (!all(c(m$iv, m$moderator, m$dv) %in% ids)) { add("error", "dangling_moderation", "A moderating effect refers to a construct that no longer exists.", "moderation", m$id); next }
     nm <- function(x) nms[match(x, ids)]
     if (!m$method %in% INTERACTION_METHODS) add("error", "bad_interaction_method", "Unsupported interaction-term method.", "moderation", m$id)
-    if (m$moderator %in% c(m$iv, m$dv)) add("error", "moderator_self", "The moderator must differ from the predictor and the outcome.", "moderation", m$id)
+    # A moderator equal to the predictor is a quadratic effect (X*X → Y), as in SmartPLS.
+    if (identical(m$moderator, m$dv)) add("error", "moderator_self", "The moderator must differ from the outcome.", "moderation", m$id)
     if (!paste(m$iv, m$dv) %in% pairs) add("error", "moderation_no_path", sprintf("The moderated path %s -> %s does not exist.", nm(m$iv), nm(m$dv)), "moderation", m$id)
     # The moderator's direct effect on the outcome is added by normalize_model() when it is not drawn.
     key <- paste(m$iv, m$moderator, m$dv)
@@ -644,6 +652,10 @@ generate_r_code <- function(model, settings, dataset_meta, env = NULL, generated
     a("")
     a("# 6. PLSpredict ------------------------------------------------------------")
     if (!is.null(settings$predict$seed)) a("set.seed(", settings$predict$seed, ")  # fold assignment is random")
+    # Q²predict and CVPAT (PathLab): computed from the same out-of-sample residuals and folds.
+    a("num_or_null <- ", paste(deparse(num_or_null), collapse = "\n"))
+    a("predict_q2_cvpat <- ", paste(deparse(predict_q2_cvpat, width.cutoff = 120L), collapse = "\n"))
+    a("item_construct <- setNames(pls_model$mmMatrix[, \"construct\"], pls_model$mmMatrix[, \"measurement\"])")
     if (has_hoc(model)) {
       a("# SEMinR's predict_pls() has no method for higher-order constructs. PathLab repeats the two-stage approach inside")
       a("# every fold (the held-out cases' dimension scores come from the training cases' stage-1 weights):")
@@ -651,7 +663,12 @@ generate_r_code <- function(model, settings, dataset_meta, env = NULL, generated
       a("predict_summary <- predict_pls_two_stage(pls_model, technique = ", r_str(settings$predict$technique), ", noFolds = ", settings$predict$noFolds, ", reps = ", settings$predict$reps, ")")
       a("predict_summary$PLS_out_of_sample   # RMSE and MAE of PLS-SEM predictions")
       a("predict_summary$LM_out_of_sample    # RMSE and MAE of the linear-model benchmark")
+      a("item_construct <- c(item_construct, setNames(pls_model$first_stage_model$mmMatrix[, \"construct\"], pls_model$first_stage_model$mmMatrix[, \"measurement\"]))")
+      a("r <- predict_summary$residuals")
+      a("q2_cvpat <- predict_q2_cvpat(r$actual, r$pls, r$lm, r$folds, item_construct)")
     } else {
+      a("predict_order <- ", paste(deparse(predict_order), collapse = "\n"))
+      a("ord <- predict_order(nrow(pls_model$data))   # the case order predict_pls() draws next (for its folds)")
       a("pls_predict <- predict_pls(")
       a("  model = pls_model,")
       a("  technique = ", settings$predict$technique, ",")
@@ -661,7 +678,12 @@ generate_r_code <- function(model, settings, dataset_meta, env = NULL, generated
       a("predict_summary <- summary(pls_predict)")
       a("predict_summary$PLS_out_of_sample   # RMSE and MAE of PLS-SEM predictions")
       a("predict_summary$LM_out_of_sample    # RMSE and MAE of the linear-model benchmark")
+      a("it <- pls_predict$items; cols <- colnames(it$PLS_out_of_sample_residuals); n <- nrow(pls_model$data)")
+      a("folds <- cut(seq_len(n), breaks = ", settings$predict$noFolds, ", labels = FALSE)[match(seq_len(n), ord)]")
+      a("q2_cvpat <- predict_q2_cvpat(it$item_actuals[, cols], it$PLS_out_of_sample_residuals, it$lm_out_of_sample_residuals[, cols], folds, item_construct)")
     }
+    a("do.call(rbind, lapply(q2_cvpat$q2, as.data.frame))      # Q²predict (Shmueli et al., 2019)")
+    a("do.call(rbind, lapply(q2_cvpat$cvpat, as.data.frame))   # CVPAT against IA and LM (Liengaard et al., 2021)")
   }
   advanced_code(model, settings, a)
   cmb_code(model, settings, a)

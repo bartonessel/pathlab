@@ -61,11 +61,19 @@ reader_failed <- function(what, e) {
 # conversion as an issue (nothing is changed silently). Numeric codes are kept as they are.
 plain_columns <- function(df, notes) {
   df <- as.data.frame(df, check.names = FALSE, stringsAsFactors = FALSE)
-  labelled <- character(0); fac_num <- character(0); fac_txt <- character(0); other <- character(0)
+  labelled <- character(0); value_labels <- list(); fac_num <- character(0); fac_txt <- character(0); other <- character(0)
   for (j in seq_along(df)) {
     x <- df[[j]]; nm <- names(df)[j]
     if (inherits(x, "haven_labelled")) {
-      if (length(attr(x, "labels"))) labelled <- c(labelled, nm)
+      lab <- attr(x, "labels")
+      if (length(lab)) {
+        labelled <- c(labelled, nm)
+        # The value labels become the variable's level labels (as SPSS shows them); the data keep their codes.
+        if (is.numeric(lab) && !is.null(names(lab))) {
+          keep <- !is.na(lab) & nzchar(trimws(names(lab)))
+          value_labels[[nm]] <- unname(Map(function(v, l) list(value = as.character(v), label = trimws(l)), unname(lab[keep]), names(lab)[keep]))
+        }
+      }
       x <- haven::zap_labels(x)
     }
     if (is.factor(x)) {
@@ -77,15 +85,15 @@ plain_columns <- function(df, notes) {
     if (!inherits(x, c("Date", "POSIXt"))) x <- as.vector(x)   # drop format/label attributes; values unchanged
     df[[j]] <- x
   }
-  if (length(labelled)) notes[[length(notes) + 1]] <- issue("info", "value_labels_ignored",
-    sprintf("%d column(s) have value labels; the numeric codes are used and the labels are ignored.", length(labelled)), labelled)
+  if (length(labelled)) notes[[length(notes) + 1]] <- issue("info", "value_labels_kept",
+    sprintf("%d column(s) have value labels; the numeric codes are kept and the labels are shown as their level labels.", length(labelled)), labelled)
   if (length(fac_num)) notes[[length(notes) + 1]] <- issue("info", "factor_codes_numeric",
     sprintf("%d categorical column(s) with numeric levels were read as numbers (the level values, not their positions).", length(fac_num)), fac_num)
   if (length(fac_txt)) notes[[length(notes) + 1]] <- issue("info", "factor_as_text",
     sprintf("%d categorical column(s) with text levels were read as text.", length(fac_txt)), fac_txt)
   if (length(other)) notes[[length(notes) + 1]] <- issue("warning", "complex_columns_as_text",
     sprintf("%d column(s) of an unusual type were converted to text and cannot be used as indicators.", length(other)), other)
-  list(data = df, notes = notes)
+  list(data = df, notes = notes, valueLabels = value_labels)
 }
 
 # Returns list(data = data.frame, reader = list(...describing the exact call...), sheets, notes, declared); declared is
@@ -232,7 +240,7 @@ read_other_format <- function(path, kind, ext, sheet) {
   }
   p <- plain_columns(df, notes)
   check_shape(p$data)
-  list(data = p$data, reader = reader, sheets = sheets, notes = p$notes, declared = declared)
+  list(data = p$data, reader = reader, sheets = sheets, notes = p$notes, declared = declared, valueLabels = p$valueLabels)
 }
 
 column_type <- function(x) {
@@ -404,7 +412,22 @@ validate_dataset <- function(df, profile, reader) {
   issues
 }
 
-dataset_preview <- function(df, n = 50) dataset_rows(df, 0L, n)
+dataset_preview <- function(df, n = 50) dataset_rows_json(df, 0L, n)
+
+#' The same rows as dataset_rows(), already written as JSON (an array of row arrays, NA -> null) and marked as such, so
+#' the API's JSON serializer inserts it as it is (run.R registers it with json_verbatim). Written column by column, it
+#' takes milliseconds where encoding the lists cell by cell takes seconds for wide data (500 rows x 120 columns: 6 s).
+dataset_rows_json <- function(df, offset = 0L, limit = 500L) {
+  offset <- max(0L, as.integer(offset)); limit <- max(0L, as.integer(limit))
+  idx <- seq_len(nrow(df)); idx <- idx[idx > offset & idx <= offset + limit]
+  d <- df[idx, , drop = FALSE]
+  for (j in seq_along(d)) {
+    if (inherits(d[[j]], c("Date", "POSIXt"))) d[[j]] <- format(d[[j]])
+    else if (is.factor(d[[j]])) d[[j]] <- as.character(d[[j]])
+  }
+  json <- if (!nrow(d)) "[]" else as.character(jsonlite::toJSON(d, dataframe = "values", na = "null", digits = NA))
+  structure(json, class = "json")
+}
 
 # Rows offset+1 .. offset+limit as JSON-ready lists (NA -> null). Values are shown exactly as read.
 dataset_rows <- function(df, offset = 0L, limit = 500L) {
