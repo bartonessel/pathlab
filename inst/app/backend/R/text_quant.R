@@ -159,6 +159,7 @@ TQ_UDPIPE <- c(en = "english-ewt", fr = "french-gsd", de = "german-gsd", es = "s
 tq_model_dir <- function() { d <- file.path(Sys.getenv("PATHLAB_DATA", file.path(path.expand("~"), ".pathlab")), "udpipe"); dir.create(d, recursive = TRUE, showWarnings = FALSE); d }
 tq_model_file <- function(lang) { m <- TQ_UDPIPE[[lang]]; if (is.null(m)) return(NULL); f <- list.files(tq_model_dir(), pattern = paste0("^", m, ".*\\.udpipe$"), full.names = TRUE); if (length(f)) f[1] else NULL }
 tq_download_model <- function(lang) {
+  need_packages("udpipe", "Parts of speech", "text_unavailable")
   m <- TQ_UDPIPE[[lang]]; if (is.null(m)) api_error(400, "text_model", "No udpipe model for this language.")
   r <- tryCatch(udpipe::udpipe_download_model(language = m, model_dir = tq_model_dir()), error = function(e) api_error(502, "text_model_download", paste("The model could not be downloaded:", sanitize_message(conditionMessage(e)))))
   list(file = basename(r$file_model), language = m)
@@ -331,10 +332,20 @@ tq_dictionary <- function(pp, p) {
 }
 deparse_names <- function(x) ifelse(make.names(x) == x, x, sprintf("`%s`", x))
 
+#' A clear message when an analysis's optional R packages are not installed (before the documents are prepared).
+tq_need <- function(kind, p) {
+  pk <- switch(kind, sentiment = c("sentimentr", "lexicon"), pos = "udpipe", searchk = "stm", summary = c("sentimentr", "textrank"),
+               topics = switch(p$method %||% "lda", seeded = "seededlda", stm = "stm", "topicmodels"), character(0))
+  label <- switch(kind, sentiment = "Sentiment analysis", pos = "Parts of speech", searchk = "Choosing the number of topics",
+                  summary = "Document summaries", topics = "This topic model", "This analysis")
+  if (length(pk)) need_packages(pk, label, "text_unavailable")
+}
+
 text_analyze <- function(proj, b) {
   kind <- as.character(b$kind %||% "")
   f <- switch(kind, frequency = tq_frequency, keyness = tq_keyness, collocations = tq_collocations, lexdiv = tq_lexdiv, zipf = tq_zipf, sentiment = tq_sentiment,
               pos = tq_pos, topics = tq_topics, searchk = tq_searchk, summary = tq_summary, dictionary = tq_dictionary, api_error(400, "text_kind", "Unknown text analysis."))
+  tq_need(kind, b$params %||% list())
   pp <- tq_prep(proj, b$documentIds, b$options)
   t0 <- Sys.time()
   warns <- character(0)

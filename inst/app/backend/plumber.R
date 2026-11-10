@@ -99,6 +99,9 @@ function() {
     ),
     # The Statistics references always list jmv (its installed version), also before any analysis has run.
     stats = list(references = stats_references(character(0))),
+    # The references shown under each model's results: the app, R, the package that computes it, then the methods
+    # literature for that model. They do not depend on a result, so they are listed before the first run too.
+    modelReferences = lapply(stats::setNames(nm = c("plssem", "cbsem", "gsca", "lpa", "qca", "ml")), model_references),
     pubTables = pub_tables_available(),
     limits = list(maxUploadMB = as.numeric(Sys.getenv("PATHLAB_MAX_UPLOAD_MB", "25")),
                   sessionTtlHours = session_ttl_seconds() / 3600)

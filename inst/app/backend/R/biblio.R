@@ -14,7 +14,13 @@ BIBLIO_FIELDS <- c(DE = "Author keywords", ID = "Keywords Plus", KW = "All keywo
 bq <- function(e) suppressWarnings(suppressMessages(e))
 
 #' bibliometrix looks up its own data sets (country list, logo) with data(), which needs the package attached.
-biblio_attach <- function() if (!"package:bibliometrix" %in% search()) suppressPackageStartupMessages(attachNamespace("bibliometrix"))
+biblio_attach <- function() {
+  biblio_need()
+  if (!"package:bibliometrix" %in% search()) suppressPackageStartupMessages(attachNamespace("bibliometrix"))
+}
+
+#' A clear message when the bibliometric packages are not installed (an optional feature in smaller builds).
+biblio_need <- function(extra = character(0)) need_packages(c("bibliometrix", extra), "Bibliometric analysis", "biblio_unavailable")
 
 # ---- Import ---------------------------------------------------------------------------------------
 
@@ -46,6 +52,7 @@ biblio_detect <- function(raw, filename) {
 
 #' Read one export file into a bibliometrix data frame.
 biblio_read <- function(raw, filename, db = NULL) {
+  biblio_need()
   det <- biblio_detect(raw, filename)
   if (!is.null(db) && nzchar(db) && db %in% names(BIBLIO_DBS)) det$db <- db
   ext <- tools::file_ext(filename)
@@ -581,6 +588,7 @@ biblio_network <- function(proj, opts, filters) {
 
 biblio_world <- function() {
   if (!is.null(.store$world)) return(.store$world)
+  need_packages("maps", "The world map", "biblio_unavailable")
   w <- maps::map("world", plot = FALSE, fill = TRUE)
   breaks <- c(0, which(is.na(w$x)), length(w$x) + 1)
   polys <- list()
@@ -611,6 +619,7 @@ biblio_export_xlsx <- function(proj, filters, path) {
 
 #' Sample collection: bibliometric approaches in business and management (898 Web of Science records; bibliometrixData).
 biblio_sample <- function() {
+  biblio_need("bibliometrixData")
   e <- new.env()
   utils::data("management", package = "bibliometrixData", envir = e)
   e$management

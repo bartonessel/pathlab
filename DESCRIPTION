@@ -1,7 +1,7 @@
 Package: pathlab
 Type: Package
 Title: Point-and-Click PLS-SEM, CB-SEM, Statistics and More in the Browser
-Version: 1.2.10
+Version: 1.2.17
 Authors@R: person("Harry Barton", "Essel", email = "bartoness.knust.fes.eist@gmail.com", role = c("aut", "cre", "cph"))
 Description: PathLab SEM runs on your own computer and opens in your web browser, in the way
     'bibliometrix::biblioshiny()' does. You draw a path model on a canvas and estimate it with
@@ -20,7 +20,7 @@ Imports:
     NCA, flexmix, lavaan, semTools, cSEM, psych, GPArotation,
     tidyLPA, mclust, poLCA, depmixS4, lcmm, QCA, VGAM,
     jmv, nortest, BayesFactor, emmeans, car, lmtest, sandwich, lme4, lmerTest, ivreg, plm,
-    forecast, mice, pwr, metafor, ca, exact2x2, irr, qcc,
+    forecast, mice, pwr, metafor, ca, exact2x2, irr, qcc, WRS2, survey, MatchIt, chk, SetMethods,
     survival, cluster, MASS, nnet, mgcv, Matrix, rpart,
     caret, ranger, glmnet, gbm, NeuralNetTools, pROC, yardstick, kernlab, xgboost, naivebayes,
     bibliometrix, bibliometrixData, openalexR, pubmedR, maps, igraph,
@@ -28,7 +28,7 @@ Imports:
     sentimentr, lexicon, textrank, stopwords,
     stats, utils, graphics, grDevices, tools, methods, parallel
 Suggests:
-    RWeka, rJava, av, pdftools, rstudioapi, testthat, httr, chromote
+    RWeka, rJava, av, pdftools, rstudioapi, testthat, httr, chromote, blavaan, TOSTER
 NeedsCompilation: no
 URL: https://github.com/bartonessel/pathlab, https://bartonessel.r-universe.dev/pathlab
 BugReports: https://github.com/bartonessel/pathlab/issues

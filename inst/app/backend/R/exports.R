@@ -1,6 +1,6 @@
 # Exports: XLSX workbook (full precision) and self-contained HTML report.
 
-PATHLAB_VERSION <- "1.2.10"
+PATHLAB_VERSION <- "1.2.17"
 # Release code names, one per major version: 1.0.0 up to 2.0.0 is "Gauss"; 0.x has none (as in frontend/src/lib/version.ts).
 PATHLAB_CODENAMES <- c(`1` = "Gauss")
 PATHLAB_CODENAME <- unname(PATHLAB_CODENAMES[sub("[.].*$", "", PATHLAB_VERSION)])
@@ -679,4 +679,60 @@ cmb_html <- function(cm) {
                         "Marker-adjusted construct correlations", num_cols = 3:6))
   }
   paste(out, collapse = "\n")
+}
+
+# ---- References shown under a model's results ---------------------------------------------------------------
+
+#' The methods literature is curated once in AI_REFERENCES (ai.R), tagged by the kind of analysis it belongs to.
+#' Those entries are HTML; the results panel renders _underscores_ as italics, so they are converted here rather
+#' than kept twice.
+ref_html_to_text <- function(x) {
+  x <- gsub("</?i>", "_", x)
+  for (e in list(c("&amp;", "&"), c("&ndash;", "–"), c("&mdash;", "—"), c("&ldquo;", "“"),
+                 c("&rdquo;", "”"), c("&lsquo;", "‘"), c("&rsquo;", "’"), c("&hellip;", "…"),
+                 c("&eacute;", "é"), c("&uuml;", "ü"), c("&#537;", "ș"), c("&nbsp;", " "))) {
+    x <- gsub(e[1], e[2], x, fixed = TRUE)
+  }
+  x
+}
+
+#' Analyses that are optional within a model: their reference is listed only once that analysis has been run.
+#' Anything not named here belongs to the model itself and is always listed.
+REF_NEEDS <- list(shmueli2019 = "predict", dul2016 = "nca", henseler2016 = "mga", kock2015 = "cmb",
+                  hahn2002 = "fimix", sarstedt2011 = "fimix", efron1993 = "bootstrap",
+                  chen2007 = "invariance", putnick2016 = "invariance")
+
+#' The R package that does the work for each model, cited from the installed version via citation().
+MODEL_PACKAGE <- list(plssem = "seminr", cbsem = "lavaan", gsca = "gesca", lpa = "tidyLPA", qca = "QCA", ml = "caret")
+
+#' References for one model's results page: PathLab first (it is the app being used), then R and the package that
+#' computed the results, then the methods literature for that kind. `needs` marks the entries the front end drops
+#' when that optional analysis has not been run.
+model_references <- function(kind) {
+  # QCA keeps its own, fuller list (QCA_REFS in qca.R), the one its report prints; the other models draw on the
+  # literature curated for the writing assistant.
+  rest <- if (identical(kind, "qca")) {
+    # citation("QCA") already gives Dusa (2019), with the installed version; the report cites it from the table
+    # instead because it does not list the packages separately.
+    lapply(Filter(function(r) r$key != "dusa2019", QCA_REFS),
+           function(r) list(key = r$key, apa = ref_html_to_text(r$apa), needs = r$needs))
+  } else {
+    sel <- Filter(function(r) kind %in% r$kinds, AI_REFERENCES)
+    lapply(sel, function(r) list(key = r$key, apa = ref_html_to_text(r$apa), needs = REF_NEEDS[[r$key]] %||% ""))
+  }
+  base <- c(pathlab_citation("text"), stats_package_refs(c("R", MODEL_PACKAGE[[kind]])))
+  head <- lapply(base, function(a) list(key = "", apa = a, needs = ""))
+  c(head, rest[order(vapply(rest, function(r) r$apa, ""))])
+}
+
+#' R and package citations as plain text, from citation() so they match the versions installed. Unknown or
+#' uninstalled packages are skipped rather than failing the whole list.
+stats_package_refs <- function(pkgs) {
+  out <- character(0)
+  for (p in Filter(nzchar, unique(as.character(pkgs)))) {
+    txt <- tryCatch(gsub("[[:space:]]+", " ", paste(format(pkg_citation(p), style = "text"), collapse = " ")),
+                    error = function(e) "")
+    if (nzchar(txt)) out <- c(out, txt)
+  }
+  out
 }

@@ -1096,25 +1096,49 @@ qca_writeup <- function(res) {
 
 ordinal <- function(n) paste0(n, if (n %% 100 %in% 11:13) "th" else c("th", "st", "nd", "rd", rep("th", 6))[n %% 10 + 1])
 
+#' The QCA literature, in one place: the report below and the reference list under the results both read it, so a
+#' citation is written once. `needs` names the part of the analysis an entry belongs to ("" = always listed);
+#' qca_needs_run() says which of those a result actually has.
+QCA_REFS <- list(
+  list(key = "baumgartner2017", needs = "", apa = "Baumgartner, M., &amp; Thiem, A. (2017). Model ambiguities in configurational comparative research. <i>Sociological Methods &amp; Research, 46</i>(4), 954–987."),
+  list(key = "dusa2019", needs = "", apa = "Dusa, A. (2019). <i>QCA with R: A comprehensive resource</i>. Springer."),
+  list(key = "fiss2011", needs = "", apa = "Fiss, P. C. (2011). Building better causal theories: A fuzzy set approach to typologies in organization research. <i>Academy of Management Journal, 54</i>(2), 393–420."),
+  list(key = "greckhamer2018", needs = "", apa = "Greckhamer, T., Furnari, S., Fiss, P. C., &amp; Aguilera, R. V. (2018). Studying configurations with qualitative comparative analysis: Best practices in strategy and organization research. <i>Strategic Organization, 16</i>(4), 482–495."),
+  list(key = "oana2024", needs = "", apa = "Oana, I.-E., &amp; Schneider, C. Q. (2024). A robustness test protocol for applied QCA: Theory and R software application. <i>Sociological Methods &amp; Research, 53</i>(1), 57–88."),
+  list(key = "oana2021", needs = "", apa = "Oana, I.-E., Schneider, C. Q., &amp; Thomann, E. (2021). <i>Qualitative comparative analysis using R: A beginner’s guide</i>. Cambridge University Press."),
+  list(key = "pappas2021", needs = "", apa = "Pappas, I. O., &amp; Woodside, A. G. (2021). Fuzzy-set qualitative comparative analysis (fsQCA): Guidelines for research practice in information systems and marketing. <i>International Journal of Information Management, 58</i>, 102310."),
+  list(key = "ragin2008", needs = "", apa = "Ragin, C. C. (2008). <i>Redesigning social inquiry: Fuzzy sets and beyond</i>. University of Chicago Press."),
+  list(key = "schneider2010", needs = "", apa = "Schneider, C. Q., &amp; Wagemann, C. (2010). Standards of good practice in qualitative comparative analysis (QCA) and fuzzy-sets. <i>Comparative Sociology, 9</i>(3), 397–418."),
+  list(key = "schneider2012", needs = "", apa = "Schneider, C. Q., &amp; Wagemann, C. (2012). <i>Set-theoretic methods for the social sciences: A guide to qualitative comparative analysis</i>. Cambridge University Press."),
+  list(key = "mahoney2009", needs = "suin", apa = "Mahoney, J., Kimball, E., &amp; Koivu, K. L. (2009). The logic of historical explanation in the social sciences. <i>Comparative Political Studies, 42</i>(1), 114–146."),
+  list(key = "schneider2013esa", needs = "esa", apa = "Schneider, C. Q., &amp; Wagemann, C. (2013). Doing justice to logical remainders in QCA: Moving beyond the standard analysis. <i>Political Research Quarterly, 66</i>(1), 211–220."),
+  list(key = "schneider2013cases", needs = "caseTypes", apa = "Schneider, C. Q., &amp; Rohlfing, I. (2013). Combining QCA and process tracing in set-theoretic multi-method research. <i>Sociological Methods &amp; Research, 42</i>(4), 559–597."),
+  list(key = "ragin1987", needs = "theory", apa = "Ragin, C. C. (1987). <i>The comparative method: Moving beyond qualitative and quantitative strategies</i>. University of California Press."),
+  list(key = "oana2023", needs = "robustFit", apa = "Oana, I.-E., Medzihorsky, J., Quaranta, M., &amp; Schneider, C. Q. (2023). <i>SetMethods: Functions for set-theoretic multi-method research and advanced QCA</i> [R package]."),
+  list(key = "tobin1958", needs = "tobit", apa = "Tobin, J. (1958). Estimation of relationships for limited dependent variables. <i>Econometrica, 26</i>(1), 24–36."),
+  list(key = "yee2015", needs = "tobit", apa = "Yee, T. W. (2015). <i>Vector generalized linear and additive models: With an implementation in R</i>. Springer.")
+)
+
+#' Which optional parts of a QCA result are present, as the `needs` names used by QCA_REFS.
+qca_needs_run <- function(res) {
+  c(if (length(res$necessity[[1]]$suin)) "suin",
+    if (!is.null(res$sufficiency[[1]]$esa)) "esa",
+    if (!is.null(res$caseTypes)) "caseTypes",
+    if (!is.null(res$theory)) "theory",
+    if (!is.null(res$robustFit)) "robustFit",
+    if (!is.null(res$tobit) && length(res$tobit$models)) "tobit")
+}
+
 qca_references_html <- function(res) {
-  refs <- c(pathlab_citation("html"),
-            "Baumgartner, M., &amp; Thiem, A. (2017). Model ambiguities in configurational comparative research. <i>Sociological Methods &amp; Research, 46</i>(4), 954–987.",
-            sprintf("Dusa, A. (2019). <i>QCA with R: A comprehensive resource</i>. Springer. (QCA package version %s.)", html_escape(res$packages$QCA %||% "")),
-            "Fiss, P. C. (2011). Building better causal theories: A fuzzy set approach to typologies in organization research. <i>Academy of Management Journal, 54</i>(2), 393–420.",
-            "Greckhamer, T., Furnari, S., Fiss, P. C., &amp; Aguilera, R. V. (2018). Studying configurations with qualitative comparative analysis: Best practices in strategy and organization research. <i>Strategic Organization, 16</i>(4), 482–495.",
-            "Oana, I.-E., &amp; Schneider, C. Q. (2024). A robustness test protocol for applied QCA: Theory and R software application. <i>Sociological Methods &amp; Research, 53</i>(1), 57–88.",
-            "Oana, I.-E., Schneider, C. Q., &amp; Thomann, E. (2021). <i>Qualitative comparative analysis using R: A beginner’s guide</i>. Cambridge University Press.",
-            "Pappas, I. O., &amp; Woodside, A. G. (2021). Fuzzy-set qualitative comparative analysis (fsQCA): Guidelines for research practice in information systems and marketing. <i>International Journal of Information Management, 58</i>, 102310.",
-            "Ragin, C. C. (2008). <i>Redesigning social inquiry: Fuzzy sets and beyond</i>. University of Chicago Press.",
-            "Schneider, C. Q., &amp; Wagemann, C. (2010). Standards of good practice in qualitative comparative analysis (QCA) and fuzzy-sets. <i>Comparative Sociology, 9</i>(3), 397–418.",
-            "Schneider, C. Q., &amp; Wagemann, C. (2012). <i>Set-theoretic methods for the social sciences: A guide to qualitative comparative analysis</i>. Cambridge University Press.",
-            if (length(res$necessity[[1]]$suin)) "Mahoney, J., Kimball, E., &amp; Koivu, K. L. (2009). The logic of historical explanation in the social sciences. <i>Comparative Political Studies, 42</i>(1), 114–146.",
-            if (!is.null(res$sufficiency[[1]]$esa)) "Schneider, C. Q., &amp; Wagemann, C. (2013). Doing justice to logical remainders in QCA: Moving beyond the standard analysis. <i>Political Research Quarterly, 66</i>(1), 211–220.",
-            if (!is.null(res$caseTypes)) "Schneider, C. Q., &amp; Rohlfing, I. (2013). Combining QCA and process tracing in set-theoretic multi-method research. <i>Sociological Methods &amp; Research, 42</i>(4), 559–597.",
-            if (!is.null(res$theory)) "Ragin, C. C. (1987). <i>The comparative method: Moving beyond qualitative and quantitative strategies</i>. University of California Press.",
-            if (!is.null(res$robustFit)) sprintf("Oana, I.-E., Medzihorsky, J., Quaranta, M., &amp; Schneider, C. Q. (2023). <i>SetMethods: Functions for set-theoretic multi-method research and advanced QCA</i> (R package version %s).", html_escape(res$robustFit$package %||% "")),
-            if (!is.null(res$tobit) && length(res$tobit$models)) c("Tobin, J. (1958). Estimation of relationships for limited dependent variables. <i>Econometrica, 26</i>(1), 24–36.",
-                                                                    sprintf("Yee, T. W. (2015). <i>Vector generalized linear and additive models: With an implementation in R</i>. Springer. (VGAM package version %s.)", html_escape(res$tobit$package %||% ""))))
+  have <- qca_needs_run(res)
+  # The package versions are known here, so the two package citations say which version produced the results.
+  ver <- function(key, apa) switch(key,
+    dusa2019 = sprintf("%s (QCA package version %s.)", sub("[.]$", "", apa), html_escape(res$packages$QCA %||% "")),
+    oana2023 = sub("\\[R package\\]", sprintf("(R package version %s)", html_escape(res$robustFit$package %||% "")), apa),
+    yee2015 = sprintf("%s (VGAM package version %s.)", sub("[.]$", "", apa), html_escape(res$tobit$package %||% "")),
+    apa)
+  sel <- Filter(function(r) !nzchar(r$needs) || r$needs %in% have, QCA_REFS)
+  refs <- c(pathlab_citation("html"), vapply(sel, function(r) ver(r$key, r$apa), ""))
   paste0("<h3>References</h3><ul class=\"refs\">", paste0("<li>", refs, "</li>", collapse = ""), "</ul>")
 }
 

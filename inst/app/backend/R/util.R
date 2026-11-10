@@ -12,6 +12,24 @@ api_error <- function(status, code, message, hint = NULL, details = NULL) {
   stop(cond)
 }
 
+#' R packages of `pkgs` that are not installed (an empty vector when all are).
+missing_packages <- function(pkgs) pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
+
+#' Stop with a clear message (HTTP 501) when a feature's optional R packages are not installed, instead of an internal
+#' error. Installs that leave a feature out on purpose (a smaller desktop build, a minimal server) rely on this.
+need_packages <- function(pkgs, feature, code = "feature_unavailable") {
+  miss <- missing_packages(pkgs)
+  if (length(miss)) {
+    q <- paste0('"', miss, '"', collapse = ", ")
+    api_error(501, code,
+              sprintf("%s needs the R package%s %s, which %s not installed.", feature, if (length(miss) > 1) "s" else "",
+                      paste(miss, collapse = ", "), if (length(miss) > 1) "are" else "is"),
+              sprintf("Install %s in R with install.packages(%s) and restart PathLab.", if (length(miss) > 1) "them" else "it",
+                      if (length(miss) > 1) paste0("c(", q, ")") else q))
+  }
+  invisible(TRUE)
+}
+
 new_id <- function(prefix = "") {
   paste0(prefix, paste(sample(c(letters, 0:9), 12, replace = TRUE), collapse = ""))
 }

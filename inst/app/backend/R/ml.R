@@ -26,6 +26,8 @@ ML_LEARNERS <- c(lm = "Linear / logistic regression", glmnet = "Elastic net", ra
                  vapply(WEKA_CAT, function(x) x$name, ""))
 # caret methods of the learners whose key differs from the method name (XGBoost has its own model list, below).
 ML_CARET_METHOD <- c(svm = "svmRadial", nb = "naive_bayes", lda = "lda")
+# R packages of the learners that are not part of R itself (checked before a run, so a missing one gets a clear message).
+ML_PACKAGES <- c(glmnet = "glmnet", ranger = "ranger", gbm = "gbm", svm = "kernlab", xgb = "xgboost", nb = "naivebayes")
 # Learners for class targets only, and for numeric targets only.
 ML_CLASS_ONLY <- c("j48", "nb", "lda", "voted", "smo", names(Filter(function(x) x$target == "class", WEKA_CAT)))
 ML_NUM_ONLY <- names(Filter(function(x) x$target == "numeric", WEKA_CAT))
@@ -501,6 +503,15 @@ validate_ml <- function(df, o) {
   if (any(o$learners %in% ML_WEKA)) {
     ws <- weka_status()
     if (!isTRUE(ws$available)) add("error", "ml_weka", sprintf("%s: %s", paste(unname(ML_LEARNERS[intersect(ML_WEKA, o$learners)]), collapse = ", "), ws$message), ws$hint)
+  }
+  lp <- ML_PACKAGES[intersect(names(ML_PACKAGES), o$learners)]
+  miss <- missing_packages(unique(unname(lp)))
+  if (length(miss)) {
+    who <- unname(ML_LEARNERS[names(lp)[lp %in% miss]])
+    add("error", "ml_package", sprintf("%s: the R package%s %s %s not installed.", paste(who, collapse = ", "), if (length(miss) > 1) "s" else "",
+                                       paste(miss, collapse = ", "), if (length(miss) > 1) "are" else "is"),
+        sprintf("Remove %s from the learners, or install %s in R with install.packages(%s) and restart PathLab.", if (length(who) > 1) "them" else "it",
+                if (length(miss) > 1) "them" else "it", paste0(if (length(miss) > 1) "c(" else "", paste0('"', miss, '"', collapse = ", "), if (length(miss) > 1) ")" else "")))
   }
   co <- intersect(ML_CLASS_ONLY, o$learners)
   if (length(co) && nzchar(o$target) && o$target %in% names(df) && ml_task(df[[o$target]], o$task) == "regression")

@@ -10,7 +10,8 @@
 EXTRAS <- c(RWeka = "WEKA learners (Machine learning); needs a 64-bit Java",
             rJava = "Java bridge for the WEKA learners",
             av = "audio and video recordings (Text model)",
-            pdftools = "reading PDF documents (Text model)")
+            pdftools = "reading PDF documents (Text model)",
+            blavaan = "Bayesian CB-SEM; installs rstan (a large download)")
 
 app_dir <- function() {
   d <- system.file("app", package = "pathlab")
@@ -152,7 +153,7 @@ check_setup <- function() {
 }
 
 #' Install the optional packages
-install_extras <- function(which = c("RWeka", "rJava", "av", "pdftools"), repos = getOption("repos")) {
+install_extras <- function(which = c("RWeka", "rJava", "av", "pdftools", "blavaan"), repos = getOption("repos")) {
   which <- intersect(which, names(EXTRAS))
   todo <- which[!vapply(which, requireNamespace, logical(1), quietly = TRUE)]
   if (!length(todo)) { message("All optional packages are installed."); return(invisible(character())) }
