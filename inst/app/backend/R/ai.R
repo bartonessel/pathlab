@@ -17,13 +17,30 @@ AI_PROVIDERS <- list(
   kimi = list(label = "Moonshot Kimi", env = c("MOONSHOT_API_KEY", "KIMI_API_KEY"), models = c("kimi-k2-turbo-preview", "kimi-k2-thinking", "kimi-latest"), api = "Moonshot API (OpenAI-compatible)",
               base = "https://api.moonshot.ai/v1", baseEnv = "MOONSHOT_BASE_URL", images = TRUE),
   qwen = list(label = "Alibaba Qwen", env = c("DASHSCOPE_API_KEY", "QWEN_API_KEY"), models = c("qwen-plus", "qwen-max", "qwen-flash", "qwen-vl-max"), api = "Model Studio / DashScope (OpenAI-compatible)",
-              base = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", baseEnv = "DASHSCOPE_BASE_URL", images = TRUE, maxOut = c(`qwen-max` = 8192, `qwen-vl-max` = 8192))
+              base = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", baseEnv = "DASHSCOPE_BASE_URL", images = TRUE, maxOut = c(`qwen-max` = 8192, `qwen-vl-max` = 8192)),
+  # A model running on this computer through Ollama. `local`: no API key, and nothing leaves the machine, so the
+  # models are whatever the user has pulled rather than a list fixed here.
+  ollama = list(label = "Ollama (on this computer)", env = character(0), models = character(0), api = "Ollama (OpenAI-compatible)",
+                base = "http://127.0.0.1:11434/v1", baseEnv = "OLLAMA_BASE_URL", images = TRUE, local = TRUE)
 )
-AI_COMPAT <- c("deepseek", "kimi", "qwen")
+AI_COMPAT <- c("deepseek", "kimi", "qwen", "ollama")
+#' A local provider may be addressed over plain http, because the request never leaves this computer; everything
+#' else must be https.
 ai_base_url <- function(provider) {
   p <- AI_PROVIDERS[[provider]]
   u <- sub("/+$", "", trimws(Sys.getenv(p$baseEnv %||% "")))
-  if (nzchar(u) && grepl("^https://[A-Za-z0-9.-]+(:[0-9]+)?(/.*)?$", u)) u else p$base
+  ok <- grepl("^https://[A-Za-z0-9.-]+(:[0-9]+)?(/.*)?$", u) ||
+    (isTRUE(p$local) && grepl("^http://(127\\.0\\.0\\.1|localhost|\\[::1\\])(:[0-9]+)?(/.*)?$", u))
+  if (nzchar(u) && ok) u else p$base
+}
+#' The models Ollama has pulled on this computer, newest first; an empty list if Ollama is not running.
+ollama_models <- function() {
+  root <- sub("/v1$", "", ai_base_url("ollama"))
+  out <- tryCatch({
+    resp <- httr2::req_perform(httr2::req_timeout(httr2::request(paste0(root, "/api/tags")), 5))
+    vapply(httr2::resp_body_json(resp, simplifyVector = FALSE)$models %||% list(), function(m) as.character(m$name %||% ""), "")
+  }, error = function(e) character(0))
+  unname(Filter(nzchar, out))
 }
 AZURE_API_VERSION <- "2024-10-21"
 AI_MAX_FACT_CHARS <- 200000
@@ -54,8 +71,11 @@ ai_status <- function(proj) {
   st <- ai_state(proj)
   provs <- lapply(names(AI_PROVIDERS), function(id) {
     p <- AI_PROVIDERS[[id]]; k <- ai_key(proj, id)
-    list(id = id, label = p$label, api = p$api, models = as.list(p$models), hasKey = !is.null(k), keySource = if (is.null(k)) NULL else k$source,
-         envVar = p$env[1])
+    local <- isTRUE(p$local)
+    models <- if (local) as.list(ollama_models()) else as.list(p$models)
+    list(id = id, label = p$label, api = p$api, models = models, hasKey = local || !is.null(k),
+         keySource = if (local) "local" else if (is.null(k)) NULL else k$source, envVar = p$env[1], local = local,
+         ready = if (local) length(models) > 0 else NULL)
   })
   if (ai_mock_enabled()) provs[[length(provs) + 1]] <- list(id = "mock", label = "Test provider (offline)", api = "mock", models = list("mock-1"), hasKey = TRUE, keySource = "environment", envVar = "PATHLAB_AI_MOCK")
   list(providers = provs, azure = list(endpoint = st$azure$endpoint %||% "", apiVersion = st$azure$apiVersion %||% AZURE_API_VERSION),
@@ -116,7 +136,8 @@ ai_complete <- function(proj, provider, model, system, messages, max_tokens = 40
   if (!nzchar(model) && provider != "mock") api_error(400, "ai_model", "Choose a model (for Azure, the deployment name).")
   if (!grepl("^[A-Za-z0-9._:/-]{1,100}$", model) && provider != "mock") api_error(400, "ai_model", "The model name contains characters that are not allowed.")
   max_tokens <- max(256, min(32000, round(as.numeric(max_tokens %||% 4000))))
-  k <- if (provider == "mock") list(key = "", source = "environment") else ai_key(proj, provider)
+  # A local provider needs no key: the request goes to this computer, so there is nothing to authenticate to.
+  k <- if (provider == "mock" || isTRUE(AI_PROVIDERS[[provider]]$local)) list(key = "", source = "local") else ai_key(proj, provider)
   if (is.null(k)) api_error(400, "ai_no_key", paste0("No API key is set for ", AI_PROVIDERS[[provider]]$label, "."), "Open AI settings and paste your own API key, or set the environment variable on the server.")
   key <- k$key
   if (!is.null(image) && isFALSE(AI_PROVIDERS[[provider]]$images))
@@ -143,7 +164,9 @@ ai_complete <- function(proj, provider, model, system, messages, max_tokens = 40
          stop = if (identical(ch$finish_reason, "length")) "max_tokens" else ch$finish_reason %||% "")
   }
   out <- if (provider %in% AI_COMPAT) {
-    chat_out(ai_perform(httr2::req_body_json(httr2::req_auth_bearer_token(httr2::request(paste0(ai_base_url(provider), "/chat/completions")), key),
+    req <- httr2::request(paste0(ai_base_url(provider), "/chat/completions"))
+    if (nzchar(key)) req <- httr2::req_auth_bearer_token(req, key)   # a local provider has no key to send
+    chat_out(ai_perform(httr2::req_body_json(req,
                                               list(model = model, max_tokens = max_tokens, messages = c(list(list(role = "system", content = system)), with_image("compat")))), key))
   } else switch(provider,
     mock = if (is.null(image)) ai_mock_reply(system, msgs) else ai_mock_image_reply(msgs),
@@ -261,6 +284,15 @@ ai_fact_sheet <- function(proj, raw_items, style = "apa7") {
   parts <- character(0); tables <- list(); kinds <- character(0); nt <- 1
   for (i in seq_along(raw_items)) {
     it <- raw_items[[i]]
+    built <- ai_item_html(proj, it)
+    if (!is.null(built)) {                      # bibliometrics or qualitative text: built from the project itself
+      title <- substr(trimws(as.character(it$title %||% "Analysis")), 1, 120)
+      tx <- ai_report_text(built$html, nt); nt <- tx$next_table
+      kinds <- c(kinds, built$kind)
+      parts <- c(parts, paste0("=== Analysis ", i, ": ", title, " (", ai_kind_label(built$kind), ") ===\n", tx$text))
+      tables <- c(tables, lapply(tx$tables, function(t) c(t, list(analysis = title))))
+      next
+    }
     r <- read_result(proj, as.character(it$resultId %||% ""))
     rule <- it$decisionRule
     if (!is.null(rule)) {
@@ -283,7 +315,31 @@ ai_fact_sheet <- function(proj, raw_items, style = "apa7") {
 
 ai_kind_label <- function(kind, r = NULL) switch(kind, plssem = "PLS-SEM", cbsem = "CB-SEM", gsca = "GSCA", efa = "EFA/PCA", regression = "Regression", fimix = "FIMIX-PLS",
                                                  invariance = "Measurement invariance", lpa = "Latent profile analysis", qca = "QCA",
-                                                 ml = if (identical(r$mode, "semann")) "SEM-ANN" else "Machine learning", stats = r$label %||% "Statistics", kind)
+                                                 ml = if (identical(r$mode, "semann")) "SEM-ANN" else "Machine learning", stats = r$label %||% "Statistics",
+                                                 biblio = "Bibliometric analysis", qda = "Qualitative text analysis", kind)
+
+#' Bibliometrics and qualitative text analysis keep no result in the result store, but the collection and the
+#' documents are held on the project, so the server can still build their report itself and the fact sheet stays
+#' grounded in what the server holds rather than in anything the browser sends.
+ai_item_html <- function(proj, it) {
+  kind <- as.character(it$kind %||% "")
+  if (identical(kind, "biblio")) {
+    if (is.null(proj$biblio$M)) api_error(400, "ai_no_biblio", "This project has no bibliographic collection loaded.")
+    return(list(kind = "biblio", html = biblio_report_html(proj, it$filters, it$sections %||% names(BIBLIO_REPORT_SECTIONS), proj$name)))
+  }
+  if (identical(kind, "qda")) {
+    tb <- qda_report_tables(proj, it$qda %||% list(), it)
+    if (!nrow(tb$codebook)) api_error(400, "ai_no_qda", "This project has no coded text yet.")
+    tbl <- function(title, df) if (!nrow(df)) "" else paste0(
+      "<h3>", html_escape(title), "</h3><table><thead><tr>", paste0("<th>", html_escape(names(df)), "</th>", collapse = ""), "</tr></thead><tbody>",
+      paste0(apply(utils::head(df, 60), 1, function(row) paste0("<tr>", paste0("<td>", html_escape(as.character(row)), "</td>", collapse = ""), "</tr>")), collapse = ""),
+      "</tbody></table>")
+    return(list(kind = "qda", html = paste0(
+      "<p>", nrow(tb$codebook), " codes and ", nrow(tb$segments), " coded segments in ", nrow(tb$documents), " documents.</p>",
+      tbl("Codebook", tb$codebook), tbl("Summary grid", tb$summaries), tbl("Documents", tb$documents))))
+  }
+  NULL
+}
 
 # ---- Curated references (APA 7). The model may cite only these; the reference list is built from them. ----
 
@@ -411,7 +467,13 @@ AI_REFERENCES <- list(
   ai_ref("hausman1978", "Hausman, 1978", "Hausman, J. A. (1978). Specification tests in econometrics. <i>Econometrica, 46</i>(6), 1251&ndash;1271. https://doi.org/10.2307/1913827", c("stats")),
   ai_ref("wooldridge2010", "Wooldridge, 2010", "Wooldridge, J. M. (2010). <i>Econometric analysis of cross section and panel data</i> (2nd ed.). MIT Press.", c("stats")),
   ai_ref("baltagi2021", "Baltagi, 2021", "Baltagi, B. H. (2021). <i>Econometric analysis of panel data</i> (6th ed.). Springer.", c("stats")),
-  ai_ref("field2018", "Field, 2018", "Field, A. (2018). <i>Discovering statistics using IBM SPSS Statistics</i> (5th ed.). Sage.", c("stats"))
+  ai_ref("field2018", "Field, 2018", "Field, A. (2018). <i>Discovering statistics using IBM SPSS Statistics</i> (5th ed.). Sage.", c("stats")),
+  ai_ref("aria2017", "Aria &amp; Cuccurullo, 2017", "Aria, M., &amp; Cuccurullo, C. (2017). bibliometrix: An R-tool for comprehensive science mapping analysis. <i>Journal of Informetrics, 11</i>(4), 959&ndash;975. https://doi.org/10.1016/j.joi.2017.08.007", c("biblio")),
+  ai_ref("donthu2021", "Donthu et al., 2021", "Donthu, N., Kumar, S., Mukherjee, D., Pandey, N., &amp; Lim, W. M. (2021). How to conduct a bibliometric analysis: An overview and guidelines. <i>Journal of Business Research, 133</i>, 285&ndash;296. https://doi.org/10.1016/j.jbusres.2021.04.070", c("biblio")),
+  ai_ref("zupic2015", "Zupic &amp; Čater, 2015", "Zupic, I., &amp; Čater, T. (2015). Bibliometric methods in management and organization. <i>Organizational Research Methods, 18</i>(3), 429&ndash;472. https://doi.org/10.1177/1094428114562629", c("biblio")),
+  ai_ref("benoit2018", "Benoit et al., 2018", "Benoit, K., Watanabe, K., Wang, H., Nulty, P., Obeng, A., Müller, S., &amp; Matsuo, A. (2018). quanteda: An R package for the quantitative analysis of textual data. <i>Journal of Open Source Software, 3</i>(30), 774. https://doi.org/10.21105/joss.00774", c("qda")),
+  ai_ref("braun2006", "Braun &amp; Clarke, 2006", "Braun, V., &amp; Clarke, V. (2006). Using thematic analysis in psychology. <i>Qualitative Research in Psychology, 3</i>(2), 77&ndash;101. https://doi.org/10.1191/1478088706qp063oa", c("qda")),
+  ai_ref("oconnor2020", "O&rsquo;Connor &amp; Joffe, 2020", "O&rsquo;Connor, C., &amp; Joffe, H. (2020). Intercoder reliability in qualitative research: Debates and practical guidelines. <i>International Journal of Qualitative Methods, 19</i>, 1&ndash;13. https://doi.org/10.1177/1609406919899220", c("qda"))
 )
 
 #' References for the analyses used, plus R itself (year of the running R version).

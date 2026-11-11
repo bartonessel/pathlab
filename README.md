@@ -16,7 +16,7 @@ Or from the installer bundle:
 
 1. **Install R** (version 4.2 or newer) from <https://cloud.r-project.org>. RStudio is optional but convenient:
    <https://posit.co/download/rstudio-desktop/>.
-2. **Unzip** `PathLab_1.3.2_install.zip` (right-click, then Extract All) and keep the files together.
+2. **Unzip** `PathLab_1.3.8_install.zip` (right-click, then Extract All) and keep the files together.
 3. **Install PathLab SEM:** in RStudio, open `install_pathlab.R` and click **Source** (top right of the editor). In R
    without RStudio, run `source(file.choose())` and pick `install_pathlab.R`.
 
@@ -29,7 +29,7 @@ Or from the installer bundle:
 
    ```r
    install.packages("remotes")
-   remotes::install_local("pathlab_1.3.2.tar.gz")
+   remotes::install_local("pathlab_1.3.8.tar.gz")
    ```
 
 ## Start
@@ -73,7 +73,7 @@ Optional extras:
 citation("pathlab")
 ```
 
-Essel, H. B. (2026). *PathLab SEM* (Version 1.3.2) [Computer software].
+Essel, H. B. (2026). *PathLab SEM* (Version 1.3.8) [Computer software].
 
 ## Licence
 

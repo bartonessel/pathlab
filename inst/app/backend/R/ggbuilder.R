@@ -42,17 +42,69 @@ GG_GEOMS <- list(
   qq = list(label = "Normal Q-Q points", group = "Statistics", fn = "geom_qq", aes = c("sample", "colour", "group"), req = "sample", params = c(list(size = "num:0.1:10"), GG_COMMON_COL)),
   qqline = list(label = "Normal Q-Q line", group = "Statistics", fn = "geom_qq_line", aes = c("sample", "colour", "group"), req = "sample", params = c(list(linewidth = "num:0.1:5", linetype = "linetype"), GG_COMMON_COL)),
   hline = list(label = "Horizontal reference line", group = "Annotation", fn = "geom_hline", aes = character(0), req = character(0), params = c(list(yintercept = "num:-1e12:1e12", linetype = "linetype", linewidth = "num:0.1:10"), GG_COMMON_COL)),
-  vline = list(label = "Vertical reference line", group = "Annotation", fn = "geom_vline", aes = character(0), req = character(0), params = c(list(xintercept = "num:-1e12:1e12", linetype = "linetype", linewidth = "num:0.1:10"), GG_COMMON_COL))
+  vline = list(label = "Vertical reference line", group = "Annotation", fn = "geom_vline", aes = character(0), req = character(0), params = c(list(xintercept = "num:-1e12:1e12", linetype = "linetype", linewidth = "num:0.1:10"), GG_COMMON_COL)),
+  # Builder step 3.
+  step = list(label = "Step line", group = "Basic", fn = "geom_step", aes = c("x", "y", "colour", "linetype", "alpha", "group"), req = c("x", "y"),
+              params = c(list(linewidth = "num:0.1:10", linetype = "linetype", direction = "enum:hv,vh,mid"), GG_COMMON_COL)),
+  path = list(label = "Path (in data order)", group = "Basic", fn = "geom_path", aes = c("x", "y", "colour", "linetype", "alpha", "group"), req = c("x", "y"),
+              params = c(list(linewidth = "num:0.1:10", linetype = "linetype"), GG_COMMON_COL)),
+  ribbon = list(label = "Ribbon (band)", group = "Distribution", fn = "geom_ribbon", aes = c("x", "ymin", "ymax", "fill", "colour", "alpha", "group"), req = c("x", "ymin", "ymax"),
+                params = c(list(fill = "colour", linewidth = "num:0:10"), GG_COMMON_COL)),
+  pointrange = list(label = "Point with range", group = "Summary", fn = "geom_pointrange", aes = c("x", "y", "ymin", "ymax", "colour", "shape", "alpha", "group"), req = c("x", "y", "ymin", "ymax"),
+                    params = c(list(size = "num:0.1:20", shape = "shape", linewidth = "num:0.1:10"), GG_COMMON_COL), positions = c("identity", "dodge")),
+  crossbar = list(label = "Crossbar", group = "Summary", fn = "geom_crossbar", aes = c("x", "y", "ymin", "ymax", "fill", "colour", "alpha", "group"), req = c("x", "y", "ymin", "ymax"),
+                  params = c(list(fill = "colour", width = "num:0:10", linewidth = "num:0.1:10"), GG_COMMON_COL), positions = c("identity", "dodge")),
+  hex = list(label = "Hexagonal bins", group = "Distribution", fn = "geom_hex", aes = c("x", "y", "fill", "alpha"), req = c("x", "y"),
+             params = c(list(bins = "int:2:200"), GG_COMMON_COL)),
+  bin2d = list(label = "Rectangular bins", group = "Distribution", fn = "geom_bin2d", aes = c("x", "y", "fill", "alpha"), req = c("x", "y"),
+               params = c(list(bins = "int:2:200"), GG_COMMON_COL)),
+  label = list(label = "Boxed labels", group = "Annotation", fn = "geom_label", aes = c("x", "y", "label", "colour", "fill", "size", "alpha", "group"), req = c("x", "y", "label"),
+               params = c(list(size = "num:1:20", fill = "colour", vjust = "num:-5:5", hjust = "num:-5:5"), GG_COMMON_COL)),
+  abline = list(label = "Sloped reference line", group = "Annotation", fn = "geom_abline", aes = character(0), req = character(0),
+                params = c(list(slope = "num:-1e6:1e6", intercept = "num:-1e12:1e12", linetype = "linetype", linewidth = "num:0.1:10"), GG_COMMON_COL))
 )
-GG_AES <- c("x", "y", "colour", "fill", "shape", "size", "alpha", "linetype", "group", "label", "ymin", "ymax", "sample")
+GG_AES <- c("x", "y", "colour", "fill", "shape", "size", "alpha", "linetype", "group", "label", "ymin", "ymax", "sample", "weight")
 GG_DISCRETE_AES <- c("shape", "linetype", "group")
 GG_THEMES <- c(grey = "theme_grey", bw = "theme_bw", minimal = "theme_minimal", classic = "theme_classic", light = "theme_light", dark = "theme_dark", linedraw = "theme_linedraw", void = "theme_void", apa = "theme_classic")
 GG_LINETYPES <- c("solid", "dashed", "dotted", "dotdash", "longdash", "twodash")
+# Colour scales (builder step 2). "default" leaves ggplot2's own hues alone. The viridis options and Okabe-Ito are
+# readable in greyscale and to colour-blind readers, which is what most journals now ask for; ColorBrewer's
+# qualitative sets are offered for discrete groups. Each entry is the suffix after scale_<aes>_.
+GG_PAL_DISCRETE <- c(default = "", okabe = "manual", viridis = "viridis_d", magma = "viridis_d", plasma = "viridis_d",
+                     cividis = "viridis_d", set1 = "brewer", set2 = "brewer", dark2 = "brewer", paired = "brewer", grey = "grey")
+GG_PAL_CONTINUOUS <- c(default = "", viridis = "viridis_c", magma = "viridis_c", plasma = "viridis_c", cividis = "viridis_c",
+                       blues = "distiller", oranges = "distiller", spectral = "distiller", rdbu = "distiller", grey = "grey")
+GG_PAL_OPTION <- c(viridis = "viridis", magma = "magma", plasma = "plasma", cividis = "cividis")   # viridis `option=`
+GG_PAL_BREWER <- c(set1 = "Set1", set2 = "Set2", dark2 = "Dark2", paired = "Paired", blues = "Blues", oranges = "Oranges",
+                   spectral = "Spectral", rdbu = "RdBu")
+GG_OKABE <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#000000")
+GG_TRANS <- c("identity", "log10", "log2", "sqrt", "reverse")
+# Journal presets (builder step 3): the settings a style guide asks for, applied together. They set only the look,
+# never the data or the layers, and the user can change anything afterwards. Widths are the common single-column
+# and double-column figure sizes in inches.
+GG_PRESETS <- list(
+  apa = list(label = "APA 7", theme = list(base = "apa", size = 11, family = "sans", legend = "bottom", centreTitle = FALSE, noGrid = TRUE),
+             palette = list(discrete = "grey", continuous = "grey"), extra = list(axisLine = TRUE, stripPlain = TRUE, grid = "none"), size = list(width = 6.5, height = 4.5)),
+  apacolour = list(label = "APA 7 (colour)", theme = list(base = "apa", size = 11, family = "sans", legend = "bottom", centreTitle = FALSE, noGrid = TRUE),
+                   palette = list(discrete = "okabe", continuous = "viridis"), extra = list(axisLine = TRUE, stripPlain = TRUE, grid = "none"), size = list(width = 6.5, height = 4.5)),
+  elsevier = list(label = "Elsevier (single column)", theme = list(base = "classic", size = 8, family = "sans", legend = "bottom", centreTitle = FALSE, noGrid = TRUE),
+                  palette = list(discrete = "okabe", continuous = "viridis"), extra = list(axisLine = TRUE, stripPlain = TRUE, grid = "none"), size = list(width = 3.54, height = 2.8)),
+  springer = list(label = "Springer (double column)", theme = list(base = "bw", size = 9, family = "serif", legend = "right", centreTitle = FALSE, noGrid = FALSE),
+                  palette = list(discrete = "set2", continuous = "viridis"), extra = list(border = TRUE, stripPlain = TRUE, grid = "y", minorGrid = FALSE), size = list(width = 7.08, height = 4.5)),
+  greyscale = list(label = "Greyscale printing", theme = list(base = "bw", size = 10, family = "sans", legend = "right", centreTitle = FALSE, noGrid = FALSE),
+                   palette = list(discrete = "grey", continuous = "grey"), extra = list(border = TRUE, grid = "both", minorGrid = FALSE), size = list(width = 6.5, height = 4.5)),
+  slides = list(label = "Slides (large type)", theme = list(base = "minimal", size = 16, family = "sans", legend = "bottom", centreTitle = TRUE, noGrid = FALSE),
+                palette = list(discrete = "okabe", continuous = "viridis"), extra = list(grid = "y", minorGrid = FALSE), size = list(width = 10, height = 6))
+)
 
 gg_registry <- function() list(
   geoms = lapply(names(GG_GEOMS), function(g) { d <- GG_GEOMS[[g]]; list(id = g, label = d$label, group = d$group, fn = d$fn, aes = as.list(d$aes), req = as.list(d$req),
                                                                    params = lapply(names(d$params), function(p) list(name = p, type = d$params[[p]])), positions = as.list(d$positions %||% character(0))) }),
-  aes = as.list(GG_AES), themes = as.list(names(GG_THEMES)), linetypes = as.list(GG_LINETYPES))
+  aes = as.list(GG_AES), themes = as.list(names(GG_THEMES)), linetypes = as.list(GG_LINETYPES),
+  palettes = list(discrete = as.list(names(GG_PAL_DISCRETE)), continuous = as.list(names(GG_PAL_CONTINUOUS))),
+  transforms = as.list(GG_TRANS),
+  presets = lapply(names(GG_PRESETS), function(k) { p <- GG_PRESETS[[k]]
+    list(id = k, label = p$label, theme = p$theme, palette = p$palette, extra = p$extra, size = p$size) }))
 
 gg_colour_ok <- function(x) is.character(x) && length(x) == 1 && (grepl("^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$", x) || x %in% grDevices::colors())
 
@@ -108,7 +160,45 @@ normalize_gg <- function(raw) {
   ax <- raw$axes %||% list()
   ang <- function(v) { v <- suppressWarnings(as.integer(v))[1]; if (is.na(v) || !v %in% c(0L, 45L, 90L)) 0L else v }
   axes <- list(x = ang(ax$x), y = ang(ax$y), z = ang(ax$z), yTitle = if (identical(ax$yTitle, "horizontal")) "horizontal" else "vertical")
-  list(aes = aes_of(raw$aes), layers = layers, facet = facet, labels = labs, theme = theme, coord = list(flip = isTRUE(raw$coord$flip)), size = size, three = three, axes = axes)
+  # Builder step 2: the colour scale, and limits / transform on the continuous axes. An empty limit is left to
+  # ggplot2, so only a pair of finite numbers in order is accepted.
+  pl <- raw$palette %||% list()
+  pal_pick <- function(v, ok) { v <- as.character(v %||% "default")[1]; if (v %in% names(ok)) v else "default" }
+  palette <- list(discrete = pal_pick(pl$discrete, GG_PAL_DISCRETE), continuous = pal_pick(pl$continuous, GG_PAL_CONTINUOUS),
+                  direction = if (identical(suppressWarnings(as.integer(pl$direction %||% 1L))[1], -1L) || identical(pl$direction, -1) || identical(pl$direction, "-1") || identical(pl$direction, TRUE)) -1L else 1L)
+  lim <- function(v) {
+    n <- suppressWarnings(as.numeric(unlist(v %||% list())))
+    if (length(n) != 2 || any(!is.finite(n)) || n[1] >= n[2]) NULL else n
+  }
+  one_scale <- function(s) list(limits = lim(s$limits), trans = if ((s$trans %||% "identity") %in% GG_TRANS) s$trans %||% "identity" else "identity")
+  scales <- list(x = one_scale((raw$scales %||% list())$x %||% list()), y = one_scale((raw$scales %||% list())$y %||% list()))
+  # Coordinates: zoom keeps the data and moves the window, unlike scale limits which drop what falls outside.
+  co <- raw$coord %||% list()
+  ratio <- suppressWarnings(as.numeric(co$ratio %||% NA))[1]
+  coord <- list(flip = isTRUE(co$flip), zoomX = lim(co$zoomX), zoomY = lim(co$zoomY),
+                ratio = if (is.na(ratio) || ratio <= 0 || ratio > 100) NULL else ratio,
+                polar = isTRUE(co$polar))
+  te <- raw$themeExtra %||% list()
+  theme_extra <- list(grid = if ((te$grid %||% "both") %in% c("both", "x", "y", "none")) te$grid %||% "both" else "both",
+                      minorGrid = !isFALSE(te$minorGrid), border = isTRUE(te$border), axisLine = isTRUE(te$axisLine),
+                      stripPlain = isTRUE(te$stripPlain),
+                      margin = { m <- suppressWarnings(as.numeric(te$margin %||% NA))[1]; if (is.na(m) || m < 0 || m > 40) NULL else m })
+  anns <- lapply(head(raw$annotations %||% list(), 12), function(a) {
+    ty <- as.character(a$type %||% "")[1]
+    if (!ty %in% c("hline", "vline", "text", "rect")) return(NULL)
+    num <- function(v) { n <- suppressWarnings(as.numeric(v %||% NA))[1]; if (is.finite(n)) n else NULL }
+    col <- if (gg_colour_ok(as.character(a$colour %||% "")[1])) as.character(a$colour)[1] else "#444444"
+    lt <- if ((a$linetype %||% "dashed") %in% GG_LINETYPES) a$linetype %||% "dashed" else "dashed"
+    lab <- substr(as.character(a$label %||% "")[1], 1, 200)
+    switch(ty,
+      hline = { y <- num(a$y); if (is.null(y)) NULL else list(type = ty, y = y, colour = col, linetype = lt) },
+      vline = { x <- num(a$x); if (is.null(x)) NULL else list(type = ty, x = x, colour = col, linetype = lt) },
+      text  = { x <- num(a$x); y <- num(a$y); if (is.null(x) || is.null(y) || !nzchar(lab)) NULL else list(type = ty, x = x, y = y, label = lab, colour = col) },
+      rect  = { xs <- lim(a$x); ys <- lim(a$y); if (is.null(xs) || is.null(ys)) NULL else list(type = ty, x = xs, y = ys, colour = col) })
+  })
+  annotations <- Filter(Negate(is.null), anns)
+  list(aes = aes_of(raw$aes), layers = layers, facet = facet, labels = labs, theme = theme, coord = coord,
+       palette = palette, scales = scales, themeExtra = theme_extra, annotations = annotations, size = size, three = three, axes = axes)
 }
 
 gg_vars <- function(sp) unique(c(if (isTRUE(sp$three$enabled)) sp$three$z, unlist(sp$aes), unlist(lapply(sp$layers, function(l) unlist(l$aes))), sp$facet$wrap, Filter(nzchar, c(sp$facet$rows, sp$facet$cols))))
@@ -159,7 +249,51 @@ gg_code <- function(sp, discrete = character(0), ordered = character(0), missing
   f <- sp$facet
   if (f$type == "wrap" && length(f$wrap)) parts <- c(parts, sprintf("facet_wrap(vars(%s)%s%s)", paste(vapply(f$wrap, gg_name, ""), collapse = ", "), if (f$scales != "fixed") sprintf(", scales = %s", dq(f$scales)) else "", if (!is.na(f$ncol)) sprintf(", ncol = %d", f$ncol) else ""))
   if (f$type == "grid" && (nzchar(f$rows) || nzchar(f$cols))) parts <- c(parts, sprintf("facet_grid(%s%s%s)", if (nzchar(f$rows)) sprintf("rows = vars(%s)", gg_name(f$rows)) else "", if (nzchar(f$rows) && nzchar(f$cols)) ", " else "", paste0(if (nzchar(f$cols)) sprintf("cols = vars(%s)", gg_name(f$cols)) else "", if (f$scales != "fixed") sprintf(", scales = %s", dq(f$scales)) else "")))
-  if (isTRUE(sp$coord$flip)) parts <- c(parts, "coord_flip()")
+  # Builder step 2: a colour scale for every mapped colour / fill, discrete or continuous as the variable is.
+  for (a in c("colour", "fill")) {
+    used <- a %in% names(sp$aes) || any(vapply(sp$layers, function(l) a %in% names(l$aes), TRUE))
+    if (!used) next
+    v <- c(sp$aes[[a]], unlist(lapply(sp$layers, function(l) l$aes[[a]])))[1]
+    cont <- !is.null(v) && !(v %in% discrete)
+    pick <- if (cont) sp$palette$continuous %||% "default" else sp$palette$discrete %||% "default"
+    fn <- if (cont) GG_PAL_CONTINUOUS[[pick]] %||% "" else GG_PAL_DISCRETE[[pick]] %||% ""
+    if (!nzchar(fn)) next
+    dir <- if (identical(sp$palette$direction, -1L)) ", direction = -1" else ""
+    parts <- c(parts, switch(fn,
+      manual = sprintf("scale_%s_manual(values = c(%s))", a, paste(sprintf('"%s"', GG_OKABE), collapse = ", ")),
+      viridis_d = sprintf("scale_%s_viridis_d(option = %s%s)", a, dq(GG_PAL_OPTION[[pick]] %||% "viridis"), dir),
+      viridis_c = sprintf("scale_%s_viridis_c(option = %s%s)", a, dq(GG_PAL_OPTION[[pick]] %||% "viridis"), dir),
+      brewer = sprintf("scale_%s_brewer(palette = %s%s)", a, dq(GG_PAL_BREWER[[pick]] %||% "Set2"), dir),
+      distiller = sprintf("scale_%s_distiller(palette = %s%s)", a, dq(GG_PAL_BREWER[[pick]] %||% "Blues"), dir),
+      grey = sprintf("scale_%s_grey(start = 0.15, end = 0.85)", a),
+      NULL))
+  }
+  # Limits and a transform on the continuous axes. ggplot2 drops data outside the limits, which is what a reader
+  # expects from "limits"; a transform of identity is left out so the code stays the plot's own.
+  for (a in c("x", "y")) {
+    s <- (sp$scales %||% list())[[a]]
+    if (is.null(s) || (is.null(s$limits) && identical(s$trans %||% "identity", "identity"))) next
+    args <- c(if (!is.null(s$limits)) sprintf("limits = c(%s, %s)", dq(s$limits[1]), dq(s$limits[2])),
+              if (!identical(s$trans, "identity")) sprintf("transform = %s", dq(s$trans)))
+    parts <- c(parts, sprintf("scale_%s_continuous(%s)", a, paste(args, collapse = ", ")))
+  }
+  # Annotations are drawn after the layers so a reference line sits on top of the data.
+  for (a in sp$annotations %||% list()) parts <- c(parts, switch(a$type,
+    hline = sprintf("geom_hline(yintercept = %s, colour = %s, linetype = %s)", dq(a$y), dq(a$colour), dq(a$linetype)),
+    vline = sprintf("geom_vline(xintercept = %s, colour = %s, linetype = %s)", dq(a$x), dq(a$colour), dq(a$linetype)),
+    text  = sprintf("annotate(\"text\", x = %s, y = %s, label = %s, colour = %s)", dq(a$x), dq(a$y), dq(a$label), dq(a$colour)),
+    rect  = sprintf("annotate(\"rect\", xmin = %s, xmax = %s, ymin = %s, ymax = %s, fill = %s, alpha = 0.15)",
+                    dq(a$x[1]), dq(a$x[2]), dq(a$y[1]), dq(a$y[2]), dq(a$colour)),
+    NULL))
+  # Coordinates. coord_flip and coord_polar each replace the coordinate system, so a zoom or a fixed ratio is
+  # written into whichever one is in use rather than added as a second coord_*.
+  cd <- sp$coord
+  zoom <- c(if (!is.null(cd$zoomX)) sprintf("xlim = c(%s, %s)", dq(cd$zoomX[1]), dq(cd$zoomX[2])),
+            if (!is.null(cd$zoomY)) sprintf("ylim = c(%s, %s)", dq(cd$zoomY[1]), dq(cd$zoomY[2])))
+  if (isTRUE(cd$polar)) parts <- c(parts, "coord_polar()")
+  else if (isTRUE(cd$flip)) parts <- c(parts, sprintf("coord_flip(%s)", paste(zoom, collapse = ", ")))
+  else if (!is.null(cd$ratio)) parts <- c(parts, sprintf("coord_fixed(ratio = %s%s)", dq(cd$ratio), if (length(zoom)) paste0(", ", paste(zoom, collapse = ", ")) else ""))
+  else if (length(zoom)) parts <- c(parts, sprintf("coord_cartesian(%s)", paste(zoom, collapse = ", ")))
   if (length(sp$labels)) parts <- c(parts, sprintf("labs(%s)", paste(sprintf("%s = %s", names(sp$labels), vapply(sp$labels, dq, "")), collapse = ", ")))
   t <- sp$theme
   parts <- c(parts, sprintf("%s(base_size = %s, base_family = %s)", GG_THEMES[[t$base]], dq(t$size), dq(t$family)))
@@ -169,6 +303,17 @@ gg_code <- function(sp, discrete = character(0), ordered = character(0), missing
           switch(as.character(ax$y %||% 0L), "45" = "axis.text.y = element_text(angle = 45, hjust = 1, vjust = 0.5)", "90" = "axis.text.y = element_text(angle = 90, hjust = 0.5, vjust = 0.5)", NULL),
           if (identical(ax$yTitle, "horizontal")) "axis.title.y = element_text(angle = 0, vjust = 0.5)",
           if (isTRUE(t$noGrid) || t$base == "apa") "panel.grid = element_blank()",
+          # Builder step 2 theme elements; they are written after the theme so they win, and "No grid lines" above
+          # already blanks every grid, so these only speak when it is off.
+          if (!isTRUE(t$noGrid) && t$base != "apa") switch(sp$themeExtra$grid %||% "both",
+            none = "panel.grid = element_blank()",
+            x = "panel.grid.major.y = element_blank(), panel.grid.minor.y = element_blank()",
+            y = "panel.grid.major.x = element_blank(), panel.grid.minor.x = element_blank()", NULL),
+          if (!isTRUE(t$noGrid) && t$base != "apa" && isFALSE(sp$themeExtra$minorGrid %||% TRUE)) "panel.grid.minor = element_blank()",
+          if (isTRUE(sp$themeExtra$border)) "panel.border = element_rect(colour = \"black\", fill = NA)",
+          if (isTRUE(sp$themeExtra$axisLine)) "axis.line = element_line(colour = \"black\")",
+          if (isTRUE(sp$themeExtra$stripPlain)) "strip.background = element_blank()",
+          if (!is.null(sp$themeExtra$margin)) sprintf("plot.margin = margin(%s, %s, %s, %s)", dq(sp$themeExtra$margin), dq(sp$themeExtra$margin), dq(sp$themeExtra$margin), dq(sp$themeExtra$margin)),
           if (t$base == "apa") c("axis.line = element_line(colour = \"black\")", "legend.key = element_blank()", "strip.background = element_blank()"))
   if (length(th)) parts <- c(parts, sprintf("theme(%s)", paste(th, collapse = ", ")))
   # Continuous colour / fill: a slim colour bar with the title above it, muted labels and short outside ticks (as the
