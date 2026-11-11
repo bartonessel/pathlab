@@ -255,7 +255,7 @@ ai_report_text <- function(html, table_start = 1) {
 }
 
 #' items: list(list(resultId, title, decisionRule)). Builds the report of each stored result and converts it to text.
-ai_fact_sheet <- function(proj, raw_items) {
+ai_fact_sheet <- function(proj, raw_items, style = "apa7") {
   if (!length(raw_items)) api_error(400, "ai_no_items", "Choose at least one analysis with results.")
   if (length(raw_items) > 12) api_error(400, "ai_too_many", "Choose at most 12 analyses at a time.")
   parts <- character(0); tables <- list(); kinds <- character(0); nt <- 1
@@ -277,7 +277,7 @@ ai_fact_sheet <- function(proj, raw_items) {
   }
   text <- paste(parts, collapse = "\n\n")
   if (nchar(text) > AI_MAX_FACT_CHARS) api_error(413, "ai_too_large", "The selected results are too large to send at once.", "Choose fewer analyses, or write the sections one analysis at a time.")
-  refs <- ai_references(unique(kinds))
+  refs <- ai_references(unique(kinds), style)
   list(text = text, tables = tables, kinds = as.list(unique(kinds)), references = refs, chars = nchar(text))
 }
 
@@ -287,7 +287,87 @@ ai_kind_label <- function(kind, r = NULL) switch(kind, plssem = "PLS-SEM", cbsem
 
 # ---- Curated references (APA 7). The model may cite only these; the reference list is built from them. ----
 
-ai_ref <- function(key, cite, apa, kinds) list(key = key, cite = cite, apa = apa, kinds = kinds)
+#' Harvard (Cite Them Right) from the APA 7 entry. The two carry the same facts in a different order, so the
+#' Harvard form is derived rather than written twice and left to drift: initials close up, "and" replaces the
+#' ampersand, the year loses its full stop, an article title takes single quotes, the volume leaves the italics,
+#' page ranges take "pp.", and an edition becomes "3rd edn.". Place of publication is not in the APA entry and is
+#' not invented here; most institutions accept a Harvard reference without it.
+harvard_from_apa <- function(apa) {
+  m <- regexpr("\\((1[6-9][0-9]{2}|20[0-9]{2})\\)\\. ", apa)
+  if (m < 0) return(apa)
+  authors <- substr(apa, 1, m - 2)
+  year <- sub("^\\((\\d{4})\\).*$", "\\1", substr(apa, m, m + 6))
+  rest <- substr(apa, m + attr(m, "match.length"), nchar(apa))
+  authors <- gsub(", & ", " and ", authors, fixed = TRUE)
+  authors <- gsub(" & ", " and ", authors, fixed = TRUE)
+  repeat {                                        # J. F. Hair -> J.F. Hair, however many initials
+    squeezed <- gsub("([A-Z]\\.) (?=[A-Z]\\.)", "\\1", authors, perl = TRUE)
+    if (identical(squeezed, authors)) break
+    authors <- squeezed
+  }
+  if (startsWith(rest, "<i>")) {                  # a book: title, then edition and publisher
+    rest <- sub("</i> \\((\\d+(?:st|nd|rd|th)) ed\\.\\)\\.", "</i>. \\1 edn.", rest)
+  } else {                                        # an article: 'title', journal, volume(issue), pages
+    cut <- regexpr("[.?!] <i>", rest)             # a title can end in a question mark, not only a full stop
+    if (cut > 0) {
+      end <- substr(rest, cut, cut)               # keep ? and !, drop the full stop the quotes replace
+      title <- paste0(substr(rest, 1, cut - 1), if (end == ".") "" else end)
+      tail <- substr(rest, cut + 2, nchar(rest))
+      tail <- sub("^<i>(.*), ([0-9]+)</i>", "<i>\\1</i>, \\2", tail)
+      tail <- sub("(\\([0-9/]+\\)), ([0-9]+)(&ndash;|–)", "\\1, pp. \\2\\3", tail)
+      tail <- sub("^(<i>[^<]*</i>, [0-9]+), ([0-9]+)(&ndash;|–)", "\\1, pp. \\2\\3", tail)
+      rest <- paste0("'", title, "', ", tail)
+    }
+  }
+  paste0(authors, " (", year, ") ", rest)
+}
+
+#' Vancouver from the APA 7 entry. Authors lose their punctuation (Hair JF), the title loses its italics and its
+#' quotation, and the year moves to the end for a book or in front of the volume for an article. ICMJE lists the
+#' first six authors and then "et al.". Journal names are kept in full: the NLM abbreviation is not in the entry
+#' and guessing one would be worse than printing the whole name, which many journals accept.
+vancouver_authors <- function(a) {
+  a <- gsub(", & ", ", ", a, fixed = TRUE)
+  a <- gsub(" & ", ", ", a, fixed = TRUE)
+  parts <- strsplit(a, "(?<=\\.), ", perl = TRUE)[[1]]
+  out <- vapply(parts, function(p) {
+    p <- trimws(p)
+    i <- regexpr(", (?=[A-Z]\\.)", p, perl = TRUE)         # the comma before the initials, which keep their dots
+    if (i < 0) return(sub("\\.$", "", p))                  # a corporate author, such as R Core Team
+    paste(substr(p, 1, i - 1), gsub("[^A-Za-z]", "", substr(p, i + 2, nchar(p))))
+  }, "", USE.NAMES = FALSE)
+  if (length(out) > 6) out <- c(out[1:6], "et al")
+  paste0(paste(out, collapse = ", "), ".")
+}
+
+vancouver_from_apa <- function(apa) {
+  m <- regexpr("\\((1[6-9][0-9]{2}|20[0-9]{2})\\)\\. ", apa)
+  if (m < 0) return(apa)
+  authors <- vancouver_authors(substr(apa, 1, m - 2))
+  year <- sub("^\\((\\d{4})\\).*$", "\\1", substr(apa, m, m + 6))
+  rest <- substr(apa, m + attr(m, "match.length"), nchar(apa))
+  rest <- sub(" https://doi\\.org/(\\S+)$", " doi:\\1", rest)
+  if (startsWith(rest, "<i>")) {                           # a book: title, edition, publisher; year
+    rest <- sub("</i> \\((\\d+(?:st|nd|rd|th)) ed\\.\\)\\.", ". \\1 ed.", rest)
+    rest <- gsub("</?i>", "", rest)
+    rest <- sub("( doi:\\S+)$", "", rest)                  # take the doi off before the publisher's full stop
+    rest <- sub("\\.\\s*$", "", rest)
+    doi <- regmatches(apa, regexpr("https://doi\\.org/\\S+$", apa))
+    paste0(authors, " ", rest, "; ", year, ".", if (length(doi)) paste0(" doi:", sub("https://doi\\.org/", "", doi)) else "")
+  } else {                                                 # an article: title. Journal. Year;vol(issue):pages.
+    cut <- regexpr("[.?!] <i>", rest)
+    if (cut < 0) return(paste0(authors, " ", rest))
+    title <- substr(rest, 1, cut)
+    tail <- substr(rest, cut + 2, nchar(rest))
+    jm <- regmatches(tail, regexec("^<i>(.*), ([0-9]+)</i>(\\([0-9/]+\\))?, ([^.]*)\\.(.*)$", tail))[[1]]
+    if (length(jm) != 6) return(paste0(authors, " ", title, " ", gsub("</?i>", "", tail)))
+    pages <- gsub("&ndash;|–", "-", jm[5])
+    paste0(authors, " ", title, " ", jm[2], ". ", year, ";", jm[3], jm[4], ":", pages, ".", jm[6])
+  }
+}
+
+ai_ref <- function(key, cite, apa, kinds)
+  list(key = key, cite = cite, apa = apa, harvard = harvard_from_apa(apa), vancouver = vancouver_from_apa(apa), kinds = kinds)
 AI_REFERENCES <- list(
   ai_ref("hair2022", "Hair et al., 2022", "Hair, J. F., Hult, G. T. M., Ringle, C. M., & Sarstedt, M. (2022). <i>A primer on partial least squares structural equation modeling (PLS-SEM)</i> (3rd ed.). Sage.", c("plssem", "fimix")),
   ai_ref("hair2019", "Hair et al., 2019", "Hair, J. F., Risher, J. J., Sarstedt, M., & Ringle, C. M. (2019). When to use and how to report the results of PLS-SEM. <i>European Business Review, 31</i>(1), 2&ndash;24. https://doi.org/10.1108/EBR-11-2018-0203", c("plssem")),
@@ -335,20 +415,29 @@ AI_REFERENCES <- list(
 )
 
 #' References for the analyses used, plus R itself (year of the running R version).
-ai_references <- function(kinds) {
+ai_references <- function(kinds, style = "apa7") {
   sel <- Filter(function(r) any(r$kinds %in% kinds), AI_REFERENCES)
   yr <- R.version$year
   rcore <- ai_ref("rcore", paste0("R Core Team, ", yr), paste0("R Core Team. (", yr, "). <i>R: A language and environment for statistical computing</i> (Version ", R.version$major, ".", R.version$minor,
                                                                  ") [Computer software]. R Foundation for Statistical Computing. https://www.R-project.org/"), "all")
   pathlab <- ai_ref("pathlab", pathlab_in_text(), pathlab_citation("html"), "all")
-  lapply(c(list(pathlab, rcore), sel), function(r) list(key = r$key, cite = r$cite, apa = r$apa))
+  # `apa` carries the chosen style's text: both APA 7 and Harvard cite by author and year, so everything that reads
+  # this list (the citation check, the alphabetical order, the export) works the same either way.
+  lapply(c(list(pathlab, rcore), sel), function(r)
+    list(key = r$key, cite = r$cite,
+         apa = switch(style, harvard = r$harvard, vancouver = r$vancouver, r$apa)))
 }
 
 # ---- Prompts ------------------------------------------------------------------------------------------
 
 AI_LENGTH_WORDS <- c(short = 400, standard = 900, extensive = 1800)
 
-ai_ref_lines <- function(refs) paste0("- ", vapply(refs, function(r) r$cite, ""), collapse = "\n")
+#' Vancouver cites by number, so the allowed list is numbered and the model is told to use those numbers.
+ai_ref_lines <- function(refs, style = "apa7") {
+  cites <- vapply(refs, function(r) r$cite, "")
+  if (identical(style, "vancouver")) paste0("- [", seq_along(cites), "] ", cites, collapse = "\n")
+  else paste0("- ", cites, collapse = "\n")
+}
 
 ai_writer_system <- function(o) {
   sec <- switch(o$section, methods = "the Methods section (data analysis approach and measurement/evaluation criteria)", results = "the Results section",
@@ -360,16 +449,18 @@ ai_writer_system <- function(o) {
     "1. Use ONLY the facts in the FACT SHEET supplied by the user message. Never invent numbers, analyses, samples, software, settings or results. If something a reader would expect is not in the fact sheet, write [missing: what is needed] instead of guessing.\n",
     "2. Copy every number exactly as it appears in the fact sheet, or rounded to fewer decimals. Do not compute new statistics.\n",
     "3. Refer to the tables by the numbers they have in the fact sheet, for example \"As Table 3 shows\". Do not create tables or new table numbers.\n",
-    "4. Cite only works from the ALLOWED REFERENCES list, using exactly the author and year shown, in ", o$styleLabel, " in-text form: (Author, Year), (Author & Author, Year), (Author et al., Year), or Author et al. (Year). Never cite anything else and do not write a reference list.\n",
+    if (identical(o$style, "vancouver"))
+      "4. Cite only works from the ALLOWED REFERENCES list, by the number in square brackets shown against each one, for example [1] or [2,5]. Never cite an author and year, never cite anything outside the list, and do not write a reference list.\n"
+    else paste0("4. Cite only works from the ALLOWED REFERENCES list, using exactly the author and year shown, in ", o$styleLabel, " in-text form: (Author, Year), (Author & Author, Year), (Author et al., Year), or Author et al. (Year). Never cite anything else and do not write a reference list.\n"),
     "5. Interpretation that needs the author's judgement (why a result occurred, theoretical or practical implications, comparison with prior studies) goes in a separate paragraph that begins with \"[Author judgement needed]\".\n",
     "6. Report hypotheses with the decisions stated in the fact sheet. Use the past tense for results and a ", o$tone, " academic tone.\n",
     "7. Output Markdown only: \"## \" and \"### \" headings and paragraphs. No tables, no code fences, no bullet lists unless a list is clearly better, no preamble or closing remarks.\n",
     "Target length: about ", words, " words", if (o$section == "both") " per section" else "", ".")
 }
 
-ai_fact_block <- function(fs, notes = NULL) paste0(
+ai_fact_block <- function(fs, notes = NULL, style = "apa7") paste0(
   if (!is.null(notes) && nzchar(notes)) paste0("STUDY CONTEXT FROM THE AUTHOR (use it for wording only; it is not a source of numbers):\n", notes, "\n\n") else "",
-  "FACT SHEET (results produced by R in PathLab SEM):\n", fs$text, "\n\nALLOWED REFERENCES:\n", ai_ref_lines(fs$references))
+  "FACT SHEET (results produced by R in PathLab SEM):\n", fs$text, "\n\nALLOWED REFERENCES:\n", ai_ref_lines(fs$references, style))
 
 normalize_writer_options <- function(b) {
   pick <- function(x, ok, d) { x <- as.character(x %||% d)[1]; if (x %in% ok) x else d }
@@ -385,8 +476,8 @@ ai_require_consent <- function(b) if (!isTRUE(b$consent)) api_error(400, "ai_con
 ai_write <- function(proj, b) {
   ai_require_consent(b)
   o <- normalize_writer_options(b)
-  fs <- ai_fact_sheet(proj, b$items %||% list())
-  r <- ai_complete(proj, b$provider, b$model, ai_writer_system(o), list(list(role = "user", content = ai_fact_block(fs, o$notes))), b$maxTokens %||% 8000, paste("write", o$section))
+  fs <- ai_fact_sheet(proj, b$items %||% list(), o$style)
+  r <- ai_complete(proj, b$provider, b$model, ai_writer_system(o), list(list(role = "user", content = ai_fact_block(fs, o$notes, o$style))), b$maxTokens %||% 8000, paste("write", o$section))
   c(r, list(factSheet = fs, options = o))
 }
 
