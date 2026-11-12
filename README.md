@@ -14,9 +14,36 @@ pathlab::run()
 
 Or from the installer bundle:
 
+### The quickest way, in one line
+
+```r
+install.packages("pathlab", repos = c("https://bartonessel.r-universe.dev", "https://cloud.r-project.org"))
+```
+
+This takes a ready-built package, so nothing is compiled, and `update.packages()` keeps it current afterwards.
+
+**On R 4.4 or older, add `type = "source"`:**
+
+```r
+install.packages("pathlab", repos = c("https://bartonessel.r-universe.dev", "https://cloud.r-project.org"), type = "source")
+```
+
+r-universe builds for the current R versions only — today R 4.5, 4.6 and 4.7 on Windows and macOS. Without
+`type = "source"` an older R finds nothing there and leaves the version you already have in place, which looks like
+the command doing nothing at all. PathLab has no compiled code of its own, so building it from source needs no build
+tools, and the packages it uses still come ready-built from CRAN. Check which version you ended up with:
+
+```r
+packageVersion("pathlab")
+```
+
+### From the installer bundle
+
+This route works on any R from 4.2, and needs no repository.
+
 1. **Install R** (version 4.2 or newer) from <https://cloud.r-project.org>. RStudio is optional but convenient:
    <https://posit.co/download/rstudio-desktop/>.
-2. **Unzip** `PathLab_1.3.9_install.zip` (right-click, then Extract All) and keep the files together.
+2. **Unzip** `PathLab_1.3.11_install.zip` (right-click, then Extract All) and keep the files together.
 3. **Install PathLab SEM:** in RStudio, open `install_pathlab.R` and click **Source** (top right of the editor). In R
    without RStudio, run `source(file.choose())` and pick `install_pathlab.R`.
 
@@ -45,7 +72,7 @@ Or from the installer bundle:
 
    ```r
    install.packages("remotes")
-   remotes::install_local("pathlab_1.3.9.tar.gz")
+   remotes::install_local("pathlab_1.3.11.tar.gz")
    ```
 
 ## Start
@@ -97,7 +124,7 @@ Optional extras:
 citation("pathlab")
 ```
 
-Essel, H. B. (2026). *PathLab SEM* (Version 1.3.9) [Computer software].
+Essel, H. B. (2026). *PathLab SEM* (Version 1.3.11) [Computer software].
 
 ## Licence
 
