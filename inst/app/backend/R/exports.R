@@ -1,6 +1,6 @@
 # Exports: XLSX workbook (full precision) and self-contained HTML report.
 
-PATHLAB_VERSION <- "1.3.8"
+PATHLAB_VERSION <- "1.3.9"
 # Release code names, one per major version: 1.0.0 up to 2.0.0 is "Gauss"; 0.x has none (as in frontend/src/lib/version.ts).
 PATHLAB_CODENAMES <- c(`1` = "Gauss")
 PATHLAB_CODENAME <- unname(PATHLAB_CODENAMES[sub("[.].*$", "", PATHLAB_VERSION)])

@@ -16,20 +16,36 @@ Or from the installer bundle:
 
 1. **Install R** (version 4.2 or newer) from <https://cloud.r-project.org>. RStudio is optional but convenient:
    <https://posit.co/download/rstudio-desktop/>.
-2. **Unzip** `PathLab_1.3.8_install.zip` (right-click, then Extract All) and keep the files together.
+2. **Unzip** `PathLab_1.3.9_install.zip` (right-click, then Extract All) and keep the files together.
 3. **Install PathLab SEM:** in RStudio, open `install_pathlab.R` and click **Source** (top right of the editor). In R
    without RStudio, run `source(file.choose())` and pick `install_pathlab.R`.
 
-   This also installs the R packages PathLab uses (seminr, lavaan, jmv, caret, bibliometrix, quanteda and others).
-   The first installation can take 10 to 30 minutes. On Windows and macOS the packages arrive ready-built; on Linux
-   some are compiled, which needs the usual system libraries (for example `libcurl`, `libxml2`, `libgsl`).
+   This also installs the R packages PathLab uses (seminr, lavaan, jmv, caret, quanteda and others).
+   The first installation can take 10 to 30 minutes. On Windows and macOS the packages arrive ready-built.
+
+   **On Linux** the packages are compiled from source, so install the system libraries they need first. On Fedora,
+   RHEL and openSUSE:
+
+   ```
+   sudo dnf install libcurl-devel openssl-devel libxml2-devel zlib-devel gsl-devel libsodium-devel freetype-devel libpng-devel libtiff-devel libjpeg-turbo-devel fontconfig-devel cairo-devel harfbuzz-devel fribidi-devel cmake v8-devel
+   ```
+
+   On Debian and Ubuntu:
+
+   ```
+   sudo apt install libcurl4-openssl-dev libssl-dev libxml2-dev zlib1g-dev libgsl-dev libsodium-dev libfreetype6-dev libpng-dev libtiff5-dev libjpeg-dev libfontconfig1-dev libcairo2-dev libharfbuzz-dev libfribidi-dev cmake libv8-dev
+   ```
+
+   If a package still fails to build, its own error names the library it wants; install that one and run the
+   installer again, which skips everything already installed. A slow connection may also time out on a large
+   download: `options(timeout = 600)` before the installer gives each one ten minutes.
 
    Without the installer, the same in two lines (do not use RStudio's "Install from package archive", which skips
    the packages PathLab needs):
 
    ```r
    install.packages("remotes")
-   remotes::install_local("pathlab_1.3.8.tar.gz")
+   remotes::install_local("pathlab_1.3.9.tar.gz")
    ```
 
 ## Start
@@ -59,10 +75,18 @@ again later.
 
 ```r
 pathlab::check_setup()      # lists missing packages, Java and Quarto
-pathlab::install_extras()   # optional packages: WEKA learners, audio/video, PDF documents, Bayesian CB-SEM
+pathlab::install_extras()   # optional packages: Bibliometrics, GSCA, WEKA learners, audio/video, PDF, Bayesian CB-SEM
 ```
 
+Everything else works without these. Each feature names the package it needs when you open it, and
+`install_extras()` installs them.
+
 Optional extras:
+- **Bibliometric analysis** needs `bibliometrix` (and `bibliometrixData` for the sample collection). On Linux it
+  builds `pdftools`, which needs Poppler: `sudo dnf install poppler-cpp-devel` (Fedora) or
+  `sudo apt install libpoppler-cpp-dev` (Debian and Ubuntu).
+- **GSCA analyses** need `cSEM`. On Linux it builds `symmoments`, which needs GMP: `sudo dnf install gmp-devel` or
+  `sudo apt install libgmp-dev`.
 - **WEKA learners** (Machine learning) need a 64-bit Java, for example Eclipse Temurin (<https://adoptium.net>),
   and then `pathlab::install_extras()`.
 - **Word reports** need Quarto (<https://quarto.org/docs/get-started/>).
@@ -73,7 +97,7 @@ Optional extras:
 citation("pathlab")
 ```
 
-Essel, H. B. (2026). *PathLab SEM* (Version 1.3.8) [Computer software].
+Essel, H. B. (2026). *PathLab SEM* (Version 1.3.9) [Computer software].
 
 ## Licence
 

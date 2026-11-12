@@ -9,6 +9,9 @@
 # changed: names are made syntactic only in the model copy, the project missing-value code is treated as missing and
 # rows with missing indicator values are left out (listwise).
 
+#' A clear message when cSEM is not installed (an optional package, since GSCA is one of several estimators).
+gsca_need <- function() need_packages("cSEM", "GSCA analysis", "gsca_unavailable")
+
 normalize_gsca_settings <- function(raw) {
   raw <- raw %||% list()
   b <- raw[["bootstrap"]] %||% list()
@@ -124,6 +127,7 @@ gsca_fit_indices <- function(fit, n, n_paths) {
 }
 
 run_gsca <- function(df, model, gs, missing_code = NULL, progress = function(...) NULL) {
+  gsca_need()
   issues <- validate_gsca(model, df)
   if (any(vapply(issues, function(i) i$severity == "error", TRUE)))
     stop(analysis_failure("validation", issues[[which(vapply(issues, function(i) i$severity == "error", TRUE))[1]]]$message,

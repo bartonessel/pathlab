@@ -110,6 +110,7 @@ biblio_set <- function(proj, M, files) {
 }
 
 biblio_get <- function(proj) {
+  biblio_need()
   b <- proj$biblio
   if (is.null(b) || is.null(b$M)) api_error(404, "biblio_none", "No bibliographic data are loaded.", "Import an export file (Scopus, Web of Science, Dimensions, PubMed, Lens.org or OpenAlex) or load the sample collection.")
   b

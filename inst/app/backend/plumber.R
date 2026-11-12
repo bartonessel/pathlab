@@ -476,6 +476,7 @@ function(req, res, pid) {
   body <- parse_json_body(req)
   ds <- get_dataset(p, as.character(body$datasetId %||% ""))
   model <- normalize_model(body$model)
+  gsca_need()
   gs <- normalize_gsca_settings(body$gsca)
   issues <- validate_gsca(model, dataset_with_derived(ds))
   if (any(vapply(issues, function(i) i$severity == "error", TRUE)))

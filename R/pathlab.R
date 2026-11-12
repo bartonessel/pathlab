@@ -5,9 +5,14 @@
 
 .pathlab <- new.env(parent = emptyenv())
 
-# Packages that cannot be required at install time: WEKA learners need a 64-bit Java (rJava, RWeka); av needs FFmpeg and
-# pdftools needs Poppler on Linux. Each feature explains in the app when its package is missing.
-EXTRAS <- c(RWeka = "WEKA learners (Machine learning); needs a 64-bit Java",
+# Packages that cannot be required at install time, because they need a system library or a large extra download:
+# bibliometrix brings pdftools, which needs Poppler on Linux; cSEM brings symmoments, which needs GMP; the WEKA
+# learners need a 64-bit Java (rJava, RWeka); av needs FFmpeg. Each feature explains in the app when its package is
+# missing, so an install without them works everywhere else.
+EXTRAS <- c(bibliometrix = "Bibliometric analysis (the Biblioshiny engine); needs Poppler on Linux",
+            bibliometrixData = "the sample bibliographic collection for Bibliometric analysis",
+            cSEM = "GSCA analyses; needs GMP on Linux",
+            RWeka = "WEKA learners (Machine learning); needs a 64-bit Java",
             rJava = "Java bridge for the WEKA learners",
             av = "audio and video recordings (Text model)",
             pdftools = "reading PDF documents (Text model)",
@@ -153,7 +158,8 @@ check_setup <- function() {
 }
 
 #' Install the optional packages
-install_extras <- function(which = c("RWeka", "rJava", "av", "pdftools", "blavaan"), repos = getOption("repos")) {
+install_extras <- function(which = c("bibliometrix", "bibliometrixData", "cSEM", "RWeka", "rJava", "av", "pdftools", "blavaan"),
+                           repos = getOption("repos")) {
   which <- intersect(which, names(EXTRAS))
   todo <- which[!vapply(which, requireNamespace, logical(1), quietly = TRUE)]
   if (!length(todo)) { message("All optional packages are installed."); return(invisible(character())) }
