@@ -1,7 +1,7 @@
 Package: pathlab
 Type: Package
 Title: Point-and-Click PLS-SEM, CB-SEM, Statistics and More in the Browser
-Version: 1.3.12
+Version: 1.3.14
 Authors@R: person("Harry Barton", "Essel", email = "bartoness.knust.fes.eist@gmail.com", role = c("aut", "cre", "cph"))
 Description: PathLab SEM runs on your own computer and opens in your web browser, in the way
     'bibliometrix::biblioshiny()' does. You draw a path model on a canvas and estimate it with

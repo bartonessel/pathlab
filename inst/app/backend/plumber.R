@@ -1042,6 +1042,35 @@ function(req, pid) whisper_set_cli(project_of(req, pid), parse_json_body(req)$pa
 #* @serializer unboxedJSON list(null = "null", na = "null", digits = NA)
 function(req, pid) whisper_model_start(project_of(req, pid), parse_json_body(req)$model)
 
+#* The optional R packages the app can install, and which are already there
+#* @tag setup
+#* @get /api/packages/optional
+#* @serializer unboxedJSON list(null = "null", na = "null", digits = NA)
+function() pkg_optional_status()
+
+#* Install an optional R package in the background, for a feature that needs one. Body: {"packages": ["bibliometrix"]}
+#* Only the packages of PKG_OPTIONAL are installed, only when absent, and nothing already installed is touched.
+#* @tag setup
+#* @post /api/projects/<pid>/packages/install
+#* @serializer unboxedJSON list(null = "null", na = "null", digits = NA)
+function(req, res, pid) {
+  r <- pkg_install_start(project_of(req, pid), parse_json_body(req)$packages)
+  if (identical(r$status, "running")) res$status <- 202
+  r
+}
+
+#* Progress of an install started from the app
+#* @tag setup
+#* @get /api/projects/<pid>/package-jobs/<jid>
+#* @serializer unboxedJSON list(null = "null", na = "null", digits = NA)
+function(req, pid, jid) pkg_job_status(project_of(req, pid), jid)
+
+#* Cancel an install started from the app
+#* @tag setup
+#* @delete /api/projects/<pid>/package-jobs/<jid>
+#* @serializer unboxedJSON
+function(req, pid, jid) pkg_job_cancel(project_of(req, pid), jid)
+
 #* Progress of a transcription or model download
 #* @tag text
 #* @get /api/projects/<pid>/media-jobs/<jid>

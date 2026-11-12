@@ -13,7 +13,13 @@ api_error <- function(status, code, message, hint = NULL, details = NULL) {
 }
 
 #' R packages of `pkgs` that are not installed (an empty vector when all are).
-missing_packages <- function(pkgs) pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
+#' PATHLAB_MISSING_PACKAGES names packages to treat as missing even when they are installed, so the panels that
+#' offer to install them can be tried on a machine that already has everything (as PATHLAB_AI_MOCK does for AI).
+missing_packages <- function(pkgs) {
+  pretend <- trimws(strsplit(Sys.getenv("PATHLAB_MISSING_PACKAGES", ""), ",")[[1]])
+  pretend <- pretend[nzchar(pretend)]
+  pkgs[pkgs %in% pretend | !vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
+}
 
 #' Stop with a clear message (HTTP 501) when a feature's optional R packages are not installed, instead of an internal
 #' error. Installs that leave a feature out on purpose (a smaller desktop build, a minimal server) rely on this.
@@ -21,11 +27,14 @@ need_packages <- function(pkgs, feature, code = "feature_unavailable") {
   miss <- missing_packages(pkgs)
   if (length(miss)) {
     q <- paste0('"', miss, '"', collapse = ", ")
+    # details carries the package names and the feature, so the app can offer to install them with a button
+    # instead of asking the user to type R (see packages.R).
     api_error(501, code,
               sprintf("%s needs the R package%s %s, which %s not installed.", feature, if (length(miss) > 1) "s" else "",
                       paste(miss, collapse = ", "), if (length(miss) > 1) "are" else "is"),
               sprintf("Install %s in R with install.packages(%s) and restart PathLab.", if (length(miss) > 1) "them" else "it",
-                      if (length(miss) > 1) paste0("c(", q, ")") else q))
+                      if (length(miss) > 1) paste0("c(", q, ")") else q),
+              details = list(packages = as.list(miss), feature = feature))
   }
   invisible(TRUE)
 }

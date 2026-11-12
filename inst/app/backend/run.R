@@ -30,7 +30,7 @@ backend_dir <- if (nzchar(Sys.getenv("PATHLAB_BACKEND_DIR"))) {
 } else if (length(args_file)) normalizePath(dirname(args_file[1])) else normalizePath("backend")
 repo_dir <- dirname(backend_dir)
 
-for (f in c("util.R", "data_import.R", "model_spec.R", "advanced.R", "analysis.R", "store.R", "jobs.R", "exports.R", "pubtables.R", "efa.R", "regression.R", "reports_extra.R", "fimix.R", "cbsem.R", "gsca.R", "biblio.R", "biblio_more.R", "invariance.R", "lpa.R", "derived.R", "qca.R", "ml.R", "stats.R", "panel.R", "three_step.R", "latent_more.R", "stats_more.R", "gpower.R", "soper.R", "screening.R", "explore.R", "compute.R", "stats_report.R", "ggbuilder.R", "gg3d.R", "text.R", "qda.R", "qda_tools.R", "qda_report.R", "media.R", "text_sources.R", "qda_ai.R", "qda_visual.R", "text_quant.R", "ai.R", "helpbook.R")) {
+for (f in c("util.R", "packages.R", "data_import.R", "model_spec.R", "advanced.R", "analysis.R", "store.R", "jobs.R", "exports.R", "pubtables.R", "efa.R", "regression.R", "reports_extra.R", "fimix.R", "cbsem.R", "gsca.R", "biblio.R", "biblio_more.R", "invariance.R", "lpa.R", "derived.R", "qca.R", "ml.R", "stats.R", "panel.R", "three_step.R", "latent_more.R", "stats_more.R", "gpower.R", "soper.R", "screening.R", "explore.R", "compute.R", "stats_report.R", "ggbuilder.R", "gg3d.R", "text.R", "qda.R", "qda_tools.R", "qda_report.R", "media.R", "text_sources.R", "qda_ai.R", "qda_visual.R", "text_quant.R", "ai.R", "helpbook.R")) {
   source(file.path(backend_dir, "R", f))
 }
 BACKEND_DIR <- backend_dir

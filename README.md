@@ -48,7 +48,7 @@ This route works on any R from 4.2, and needs no repository.
 
 1. **Install R** (version 4.2 or newer) from <https://cloud.r-project.org>. RStudio is optional but convenient:
    <https://posit.co/download/rstudio-desktop/>.
-2. **Unzip** `PathLab_1.3.12_install.zip` (right-click, then Extract All) and keep the files together.
+2. **Unzip** `PathLab_1.3.14_install.zip` (right-click, then Extract All) and keep the files together.
 3. **Install PathLab SEM:** in RStudio, open `install_pathlab.R` and click **Source** (top right of the editor). In R
    without RStudio, run `source(file.choose())` and pick `install_pathlab.R`.
 
@@ -77,7 +77,7 @@ This route works on any R from 4.2, and needs no repository.
 
    ```r
    install.packages("remotes")
-   remotes::install_local("pathlab_1.3.12.tar.gz")
+   remotes::install_local("pathlab_1.3.14.tar.gz")
    ```
 
 ## Start
@@ -133,8 +133,11 @@ pathlab::check_setup()      # lists missing packages, Java and Quarto
 pathlab::install_extras()   # optional packages: Bibliometrics, GSCA, WEKA learners, audio/video, PDF, Bayesian CB-SEM
 ```
 
-Everything else works without these. Each feature names the package it needs when you open it, and
-`install_extras()` installs them.
+**You do not have to do this in R.** Open a feature whose package is missing and it says so, with a button that
+installs it for you; it takes under a minute and you only do it once. The installer bundle also fetches the common
+ones while it works. The commands above are for anyone who would rather do it by hand, or install them all at once.
+
+PathLab only ever installs these packages, only when they are absent, and never changes a package you already have.
 
 Optional extras:
 - **Bibliometric analysis** needs `bibliometrix` (and `bibliometrixData` for the sample collection). On Linux it
@@ -152,7 +155,7 @@ Optional extras:
 citation("pathlab")
 ```
 
-Essel, H. B. (2026). *PathLab SEM* (Version 1.3.12) [Computer software].
+Essel, H. B. (2026). *PathLab SEM* (Version 1.3.14) [Computer software].
 
 ## Licence
 
