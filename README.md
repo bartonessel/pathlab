@@ -14,27 +14,32 @@ pathlab::run()
 
 Or from the installer bundle:
 
-### The quickest way, in one line
+### The quickest way, in one line — on R 4.5 or newer
 
 ```r
 install.packages("pathlab", repos = c("https://bartonessel.r-universe.dev", "https://cloud.r-project.org"))
 ```
 
-This takes a ready-built package, so nothing is compiled, and `update.packages()` keeps it current afterwards.
-
-**On R 4.4 or older, add `type = "source"`:**
-
-```r
-install.packages("pathlab", repos = c("https://bartonessel.r-universe.dev", "https://cloud.r-project.org"), type = "source")
-```
-
-r-universe builds for the current R versions only — today R 4.5, 4.6 and 4.7 on Windows and macOS. Without
-`type = "source"` an older R finds nothing there and leaves the version you already have in place, which looks like
-the command doing nothing at all. PathLab has no compiled code of its own, so building it from source needs no build
-tools, and the packages it uses still come ready-built from CRAN. Check which version you ended up with:
+Everything arrives ready-built, nothing is compiled, and `update.packages()` keeps it current afterwards. Check what
+you ended up with:
 
 ```r
 packageVersion("pathlab")
+```
+
+### On R 4.4 or older, use the installer bundle
+
+r-universe builds for the current R versions only — today R 4.5, 4.6 and 4.7 on Windows and macOS — so on an older R
+the command above finds nothing there and quietly leaves the version you already have in place. Adding
+`type = "source"` is **not** the answer on a machine that does not already have the packages PathLab uses: it tells R
+to build those from source too, and the newest sources ask for newer versions than an older R has ready-built copies
+of, so the install collapses part way. Use the bundle below instead; it installs everything ready-built and only
+PathLab itself from source, which needs no build tools because PathLab has no compiled code.
+
+`type = "source"` on its own is fine for *updating* a machine where PathLab already works:
+
+```r
+install.packages("pathlab", repos = c("https://bartonessel.r-universe.dev", "https://cloud.r-project.org"), type = "source")
 ```
 
 ### From the installer bundle
@@ -43,7 +48,7 @@ This route works on any R from 4.2, and needs no repository.
 
 1. **Install R** (version 4.2 or newer) from <https://cloud.r-project.org>. RStudio is optional but convenient:
    <https://posit.co/download/rstudio-desktop/>.
-2. **Unzip** `PathLab_1.3.11_install.zip` (right-click, then Extract All) and keep the files together.
+2. **Unzip** `PathLab_1.3.12_install.zip` (right-click, then Extract All) and keep the files together.
 3. **Install PathLab SEM:** in RStudio, open `install_pathlab.R` and click **Source** (top right of the editor). In R
    without RStudio, run `source(file.choose())` and pick `install_pathlab.R`.
 
@@ -72,7 +77,7 @@ This route works on any R from 4.2, and needs no repository.
 
    ```r
    install.packages("remotes")
-   remotes::install_local("pathlab_1.3.11.tar.gz")
+   remotes::install_local("pathlab_1.3.12.tar.gz")
    ```
 
 ## Start
@@ -97,6 +102,29 @@ To keep using R while the app runs, start it with `pathlab::run(background = TRU
 
 **Save your work** with the app's Save button. A project lives in memory while the app runs; saved `.plj` files open
 again later.
+
+## If an install failed part way
+
+Two messages explain nearly every failed install on Windows, and neither is cured by installing Rtools — nothing
+PathLab needs has to be compiled, so a warning about Rtools in the same log is a red herring.
+
+**`cannot remove prior installation of package 'dplyr'`, then `restored 'dplyr'`, with `Permission denied` on a
+`.dll` among the warnings at the end.** That package was loaded in the session doing the installing, so Windows
+would not let R overwrite the file and R put the old version back. Close RStudio and install from a plain R session
+(Rgui, or `R` in a terminal), where nothing is loaded. Delete any `00LOCK` folders left in the library first;
+`.libPaths()[1]` says where the library is.
+
+**`namespace 'rlang' 1.1.4 is being loaded, but >= 1.3.0 is required`.** R built a newer source version of some
+package instead of taking the ready-built one, and that newer version wants a dependency your R has no ready-built
+copy of. The log shows this coming: a table of `binary` and `source` versions where the source column is ahead.
+Install from the bundle, which never builds from source, or set this before installing:
+
+```r
+options(pkgType = "binary")
+```
+
+Then start again. An install that failed part way leaves nothing behind but those `00LOCK` folders, so there is no
+harm in repeating it; packages that installed correctly are kept.
 
 ## If something is missing
 
@@ -124,7 +152,7 @@ Optional extras:
 citation("pathlab")
 ```
 
-Essel, H. B. (2026). *PathLab SEM* (Version 1.3.11) [Computer software].
+Essel, H. B. (2026). *PathLab SEM* (Version 1.3.12) [Computer software].
 
 ## Licence
 
