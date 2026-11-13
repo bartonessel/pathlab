@@ -279,9 +279,12 @@ combined_report_html <- function(items, project_name, ds_of) {
   toc <- paste0("<ol>", paste(vapply(seq_along(items), function(i) sprintf("<li><a href=\"#analysis-%d\">%s</a></li>", i, html_escape(items[[i]]$title)), ""), collapse = ""), "</ol>")
   parts <- vapply(seq_along(items), function(i) {
     it <- items[[i]]
-    html <- build_report_html(it$result, it$title, ds_of(it$result), list(svg = it$svg, figures = it$figures, decisionRule = it$decisionRule, includeData = FALSE, qcaFlow = it$qcaFlow))
+    html <- build_report_html(it$result, it$title, ds_of(it$result), list(svg = it$svg, figures = it$figures, decisionRule = it$decisionRule, includeData = FALSE, qcaFlow = it$qcaFlow, noReferences = TRUE))
     paste0("<section class=\"analysis\" id=\"analysis-", i, "\" style=\"break-before:page\">", report_body(html), "</section>")
   }, "")
+  # One reference list for the whole document (the analyses were asked not to print their own), in the order the
+  # analyses introduce them, so the same sources are not repeated under every section.
+  refs <- unique(unlist(lapply(items, function(it) report_reference_items(result_kind(it$result), it$result)), use.names = FALSE))
   report_doc(project_name, paste0("Combined report of ", length(items), " analyses &middot; PathLab SEM ", PATHLAB_RELEASE, " &middot; generated ", html_escape(now_iso())),
-             paste0("<nav><h2>Contents</h2>", toc, "</nav>", paste(parts, collapse = "\n")))
+             paste0("<nav><h2>Contents</h2>", toc, "</nav>", paste(parts, collapse = "\n"), refs_section_html(refs)))
 }

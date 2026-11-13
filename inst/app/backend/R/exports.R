@@ -1,6 +1,6 @@
 # Exports: XLSX workbook (full precision) and self-contained HTML report.
 
-PATHLAB_VERSION <- "1.3.15"
+PATHLAB_VERSION <- "1.3.19"
 # Release code names, one per major version: 1.0.0 up to 2.0.0 is "Gauss"; 0.x has none (as in frontend/src/lib/version.ts).
 PATHLAB_CODENAMES <- c(`1` = "Gauss")
 PATHLAB_CODENAME <- unname(PATHLAB_CODENAMES[sub("[.].*$", "", PATHLAB_VERSION)])
@@ -262,6 +262,7 @@ REPORT_STYLE <- paste0("<style>",
     "figure.rfig{margin:1.2em 0}figure.rfig figcaption{font-size:.9rem;color:#3b4654;margin-top:6px}.fig-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}",
     "@media print{figure.rfig{break-inside:avoid}}",
     "pre{background:#f6f8fa;border:1px solid #e3e8ee;padding:12px;overflow:auto;font-size:.8rem;line-height:1.4}",
+    "ol.refs{font-size:.92rem;padding-left:1.5em;margin:.6em 0 0}ol.refs li{margin:0 0 .5em}",
     "footer{margin-top:3em;font-size:.82rem;color:#6b7785;border-top:1px solid #e3e8ee;padding-top:8px}",
     "@media print{body{padding:0}h2{break-after:avoid}.tbl,table{break-inside:avoid}}",
       "</style>")
@@ -272,18 +273,20 @@ build_report_html <- function(res, project_name, ds, opts = list()) {
   if (kind == "cbsem") {
     svg_cb <- sanitize_svg(opts$svg)
     return(report_doc(project_name, paste0("CB-SEM report &middot; PathLab SEM ", PATHLAB_RELEASE, " &middot; completed ", html_escape(res$completedAt %||% ""), " (UTC)"),
-                      paste0(if (!is.null(svg_cb)) paste0("<h2>Path diagram</h2><div class=\"diagram\">", svg_cb, "</div>") else "", cb_body_html(res))))
+                      paste0(if (!is.null(svg_cb)) paste0("<h2>Path diagram</h2><div class=\"diagram\">", svg_cb, "</div>") else "", cb_body_html(res),
+                             report_references_html("cbsem", res, opts))))
   }
   if (kind == "gsca") {
     svg_g <- sanitize_svg(opts$svg)
     return(report_doc(project_name, paste0("GSCA report &middot; PathLab SEM ", PATHLAB_RELEASE, " &middot; completed ", html_escape(res$completedAt %||% ""), " (UTC)"),
-                      paste0(if (!is.null(svg_g)) paste0("<h2>Path diagram</h2><div class=\"diagram\">", svg_g, "</div>") else "", gsca_body_html(res))))
+                      paste0(if (!is.null(svg_g)) paste0("<h2>Path diagram</h2><div class=\"diagram\">", svg_g, "</div>") else "", gsca_body_html(res),
+                             report_references_html("gsca", res, opts))))
   }
   if (kind == "invariance") return(report_doc(project_name, paste0("Measurement invariance report &middot; PathLab SEM ", PATHLAB_RELEASE, " &middot; completed ", html_escape(res$completedAt %||% ""), " (UTC)"), inv_body_html(res)))
   if (kind == "stats") return(report_doc(project_name, paste0(html_escape(res$label), " &middot; PathLab SEM ", PATHLAB_RELEASE, " &middot; completed ", html_escape(res$completedAt %||% ""), " (UTC)"), stats_body_html(res)))
-  if (kind == "ml") return(report_doc(project_name, paste0(if (identical(res$mode, "semann")) "SEM-ANN report" else "Machine learning report", " &middot; PathLab SEM ", PATHLAB_RELEASE, " &middot; completed ", html_escape(res$completedAt %||% ""), " (UTC)"), ml_body_html(res)))
+  if (kind == "ml") return(report_doc(project_name, paste0(if (identical(res$mode, "semann")) "SEM-ANN report" else "Machine learning report", " &middot; PathLab SEM ", PATHLAB_RELEASE, " &middot; completed ", html_escape(res$completedAt %||% ""), " (UTC)"), paste0(ml_body_html(res), report_references_html("ml", res, opts))))
   if (kind == "qca") return(report_doc(project_name, paste0("QCA report &middot; PathLab SEM ", PATHLAB_RELEASE, " &middot; completed ", html_escape(res$completedAt %||% ""), " (UTC)"), qca_body_html(res, opts$qcaFlow)))
-  if (kind == "lpa") return(report_doc(project_name, paste0("Latent profile analysis report &middot; PathLab SEM ", PATHLAB_RELEASE, " &middot; completed ", html_escape(res$completedAt %||% ""), " (UTC)"), lpa_body_html(res)))
+  if (kind == "lpa") return(report_doc(project_name, paste0("Latent profile analysis report &middot; PathLab SEM ", PATHLAB_RELEASE, " &middot; completed ", html_escape(res$completedAt %||% ""), " (UTC)"), paste0(lpa_body_html(res), report_references_html("lpa", res, opts))))
   if (kind == "fimix") return(report_doc(project_name, paste0("FIMIX-PLS report &middot; PathLab SEM ", PATHLAB_RELEASE, " &middot; completed ", html_escape(res$completedAt %||% ""), " (UTC)"), fimix_body_html(res)))
   if (kind == "regression") return(report_doc(project_name, paste0("Regression report &middot; PathLab SEM ", PATHLAB_RELEASE, " &middot; completed ", html_escape(res$completedAt %||% ""), " (UTC)"), reg_body_html(res)))
   st <- res$settings
@@ -637,6 +640,7 @@ build_report_html <- function(res, project_name, ds, opts = list()) {
     if (nrow(d) > nrow(shown)) a("<p class=\"note\">Only the first 5,000 of ", nrow(d), " rows are shown.</p>")
     a(html_table(esc(names(shown)), lapply(seq_len(nrow(shown)), function(i) vapply(shown[i, , drop = TRUE], function(v) if (is.na(v)) "" else esc(format(v)), "")), NULL, num_cols = seq_along(items)))
   }
+  a(report_references_html("plssem", res, opts))
   a("<footer>Generated by PathLab SEM ", PATHLAB_RELEASE, ". All statistics were computed by the SEMinR R package (Ray, Danks &amp; Calero Valdez). ",
     "Guideline thresholds mentioned in this report are commonly cited rules of thumb, not strict cut-offs.</footer>")
   a("</body></html>")
@@ -723,6 +727,42 @@ model_references <- function(kind) {
   base <- c(pathlab_citation("text"), stats_package_refs(c("R", MODEL_PACKAGE[[kind]])))
   head <- lapply(base, function(a) list(key = "", apa = a, needs = ""))
   c(head, rest[order(vapply(rest, function(r) r$apa, ""))])
+}
+
+#' A reference in its stored text form (_italics_ between underscores) as HTML.
+ref_text_to_html <- function(x) gsub("_([^_]+)_", "<i>\\1</i>", html_escape(x))
+
+#' The models whose generated report gets a reference list from here. QCA and Statistics build their own, fuller
+#' ones inside their report body, so they are left alone.
+REPORT_REF_KINDS <- c("plssem", "cbsem", "gsca", "lpa", "ml")
+
+#' The references one result contributes, as HTML list items: PathLab first (it is the app being used), then R and
+#' the package that computed the results, then the methods literature, kept to the analyses actually run so the
+#' list can be pasted into a manuscript without citing a method the reader never sees.
+report_reference_items <- function(kind, res) {
+  if (!kind %in% REPORT_REF_KINDS) return(character(0))
+  refs <- tryCatch(model_references(kind), error = function(e) list())
+  if (!length(refs)) return(character(0))
+  ran <- c(bootstrap = !is.null(res$bootstrap), nca = !is.null(res$nca), ipma = !is.null(res$ipma),
+           mga = !is.null(res$mga), cmb = !is.null(res$cmb), predict = !is.null(res$predict))
+  # An entry whose `needs` names something this result does not carry (FIMIX and invariance are reports of their
+  # own) drops out; unnamed lookups give NA, which isTRUE() reads as "not run".
+  refs <- Filter(function(r) { n <- r$needs %||% ""; !nzchar(n) || isTRUE(unname(ran[n])) }, refs)
+  vapply(refs, function(r) ref_text_to_html(r$apa), "")
+}
+
+#' A References section from items already in HTML, or "" when there are none.
+refs_section_html <- function(items) {
+  if (!length(items)) return("")
+  paste0("<h2>References</h2><ol class=\"refs\">", paste0("<li>", items, "</li>", collapse = ""), "</ol>")
+}
+
+#' The reference list a generated report prints at its end. `opts$noReferences` turns it off for a report that
+#' gathers several analyses into one document (combined_report_html), which prints one merged list instead of
+#' repeating the same one under every analysis.
+report_references_html <- function(kind, res, opts = list()) {
+  if (isTRUE(opts$noReferences)) return("")
+  refs_section_html(report_reference_items(kind, res))
 }
 
 #' R and package citations as plain text, from citation() so they match the versions installed. Unknown or

@@ -300,7 +300,7 @@ ai_fact_sheet <- function(proj, raw_items, style = "apa7") {
       rule$criterion <- as.character(rule$criterion %||% "p"); if (!rule$criterion %in% c("p", "ci", "both")) rule$criterion <- "p"
     }
     title <- substr(trimws(as.character(it$title %||% "Analysis")), 1, 120)
-    html <- build_report_html(r, title, proj$datasets[[r$datasetId %||% ""]], list(svg = NULL, decisionRule = rule, includeData = FALSE))
+    html <- build_report_html(r, title, proj$datasets[[r$datasetId %||% ""]], list(svg = NULL, decisionRule = rule, includeData = FALSE, noReferences = TRUE))
     tx <- ai_report_text(html, nt)
     nt <- tx$next_table
     kind <- result_kind(r); kinds <- c(kinds, kind)
