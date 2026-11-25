@@ -25,12 +25,28 @@ app_dir <- function() {
   d
 }
 
+# The browser keeps what a page stores (the project folder you chose for the Workspace, your layouts and settings)
+# separately for each origin, and the origin includes the port. A new port at every start would therefore look to the
+# browser like a different app each time, and the Workspace would come up empty. So the same port is taken whenever
+# it is free, and another only while something else holds it. The desktop app needs none of this: it serves the page
+# as pathlab://app, an origin that never changes.
+PREFERRED_PORT <- 47860L
+PREFERRED_TRIES <- 40L
+
+# httpuv::randomPort() stops with an error when it can find nothing free, so every call is guarded.
+try_port <- function(min, max, host, n = 20L) {
+  p <- tryCatch(httpuv::randomPort(min = min, max = max, host = host, n = n), error = function(e) NULL)
+  if (is.null(p) || is.na(p)) NULL else as.integer(p)
+}
+
 free_port <- function(host) {
-  for (i in seq_len(20)) {
-    p <- httpuv::randomPort(min = 8001L, max = 8999L, host = host)
-    if (!is.null(p)) return(p)
+  for (p in seq.int(PREFERRED_PORT, PREFERRED_PORT + PREFERRED_TRIES - 1L)) {
+    got <- try_port(p, p, host, n = 1L)
+    if (!is.null(got)) return(got)
   }
-  stop("No free port was found between 8001 and 8999. Give one with run(port = ...).", call. = FALSE)
+  got <- try_port(8001L, 8999L, host)   # the preferred ports are all taken: anywhere free will do
+  if (!is.null(got)) return(got)
+  stop("No free port was found for the PathLab server. Give one with run(port = ...).", call. = FALSE)
 }
 
 alive <- function(url) {

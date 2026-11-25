@@ -10,7 +10,7 @@ R process that only this computer can reach (\code{127.0.0.1}).
 run(port = NULL, host = "127.0.0.1", launch.browser = TRUE, viewer = FALSE, background = FALSE, timeout = 180)
 }
 \arguments{
-\item{port}{Port number. \code{NULL} (default) picks a free port.}
+\item{port}{Port number. \code{NULL} (default) takes the same port every time, when it is free (47860 and upwards). The browser keeps what the app stores (the project folder you chose for the Workspace, your layouts and settings) separately for each address, so a port that stayed the same is what lets PathLab find them again the next time you start it.}
 \item{host}{Address to listen on. Keep \code{"127.0.0.1"} so that only this computer can open the app.}
 \item{launch.browser}{Open the app (in the web browser, or the Viewer pane with \code{viewer = TRUE}).}
 \item{viewer}{Open the app in the Viewer pane of RStudio or Positron instead of the web browser.}
