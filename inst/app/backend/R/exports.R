@@ -1,17 +1,19 @@
 # Exports: XLSX workbook (full precision) and self-contained HTML report.
 
-PATHLAB_VERSION <- "1.4.10"
+PATHLAB_VERSION <- "1.4.20"
 # Release code names, one per major version: 1.0.0 up to 2.0.0 is "Gauss"; 0.x has none (as in frontend/src/lib/version.ts).
 PATHLAB_CODENAMES <- c(`1` = "Gauss")
 PATHLAB_CODENAME <- unname(PATHLAB_CODENAMES[sub("[.].*$", "", PATHLAB_VERSION)])
 #' Version with its code name for report headers and footers ("1.0.0 Gauss"); citations keep the plain version.
 PATHLAB_RELEASE <- if (is.na(PATHLAB_CODENAME)) PATHLAB_VERSION else paste(PATHLAB_VERSION, PATHLAB_CODENAME)
+#' The app's website, which ends its own citation (APA 7 takes no full stop after a URL).
+PATHLAB_URL <- "https://pathlab-sem.github.io"
 #' The citation of PathLab SEM itself (developed by Harry Barton Essel), listed in every reference list of the app.
 #' `fmt`: "text" marks the title with _underscores_ (shown in italics in the results), "html" uses <i>.
 pathlab_citation <- function(fmt = c("text", "html")) {
   fmt <- match.arg(fmt); yr <- format(Sys.Date(), "%Y")
   title <- if (fmt == "html") "<i>PathLab SEM</i>" else "_PathLab SEM_"
-  sprintf("Essel, H. B. (%s). %s (Version %s) [Computer software].", yr, title, PATHLAB_VERSION)
+  sprintf("Essel, H. B. (%s). %s (Version %s) [Computer software]. %s", yr, title, PATHLAB_VERSION, PATHLAB_URL)
 }
 pathlab_in_text <- function() paste0("Essel, ", format(Sys.Date(), "%Y"))
 
