@@ -3,7 +3,7 @@ bibentry(
   title = "PathLab SEM",
   author = person("Harry Barton", "Essel"),
   year = "2026",
-  note = "Version 1.5.1 [Computer software]",
+  note = "Version 1.5.3 [Computer software]",
   url = "https://pathlab-sem.github.io",
-  textVersion = "Essel, H. B. (2026). PathLab SEM (Version 1.5.1) [Computer software]. https://pathlab-sem.github.io"
+  textVersion = "Essel, H. B. (2026). PathLab SEM (Version 1.5.3) [Computer software]. https://pathlab-sem.github.io"
 )
